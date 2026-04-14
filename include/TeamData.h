@@ -53,7 +53,7 @@ static const TeamEntry TEAM_TABLE[] = {
   {"Exeter Chiefs",       "Exeter Chiefs",                "",                       "Exeter",            "EXE",  "exeter"},
   {"Glasgow Warriors",    "Glasgow Warriors",             "",                       "Glasgow",           "GLA",  "glasgow"},
   {"Edinburgh Rugby",     "Edinburgh Rugby",              "",                       "Edinburgh",         "EDI",  "edinburgh"},
-  {"Scarlets",            "Scarlets",                     "",                       "Scarlets",          "SCA",  "scarlets"},
+  {"Scarlets",            "Scarlets",                     "",                       "Scarlets",          "SCL",  "scarlets"},
   {"Stormers",            "DHL Stormers",                 "",                       "Stormers",          "STO",  "stormers"},
   {"Bulls",               "Vodacom Bulls",                "",                       "Bulls",             "BUL",  "bulls"},
   {"Lions",               "Emirates Lions",               "",                       "Lions",             "LIO",  "lions"},
@@ -63,6 +63,7 @@ static const TeamEntry TEAM_TABLE[] = {
 
 // Strip French accents — writes into dst, returns dst
 inline const char* stripAccents(const char* src, char* dst, size_t dstLen) {
+    if (!src || !dst || dstLen == 0) { if (dst && dstLen > 0) dst[0] = '\0'; return dst; }  // add this line
     static const struct { const char* from; char to; } MAP[] = {
         {"é","e"},{"è","e"},{"ê","e"},{"ë","e"},
         {"à","a"},{"â","a"},{"ä","a"},
@@ -95,6 +96,7 @@ inline const char* stripAccents(const char* src, char* dst, size_t dstLen) {
 
 // Find team entry by any source name (Idalgo, WorldRugby, or LNR)
 inline const TeamEntry* findTeam(const char* name) {
+    if (!name || !name[0]) return nullptr;   // add this line
     for (int i = 0; TEAM_TABLE[i].idalgo; i++) {
         if (strcasecmp(name, TEAM_TABLE[i].idalgo)    == 0) return &TEAM_TABLE[i];
         if (strcasecmp(name, TEAM_TABLE[i].worldrugby) == 0) return &TEAM_TABLE[i];

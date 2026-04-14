@@ -59,4 +59,4 @@
 #define C_GREY    0x7BEFu
 
 // Helper — pack RGB888 to RGB565 at compile time
-#define RGB565(r,g,b) ((uint16_t)(((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3))
+#define RGB565(r,g,b) ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
