@@ -1,3 +1,8 @@
 .pio/
 include/credentials.h
 *.bin
+data/logos/
+.DS_Store
+.vscode/
+*.elf
+*.map
