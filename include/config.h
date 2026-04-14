@@ -52,7 +52,7 @@
 #define C_WHITE   0xFFFFu
 #define C_GOLD    0xFD40u   // (255,168,0)  approx — corrected from 0xFD00
 #define C_RED     0xD8C0u   // (220,24,0)   approx
-#define C_GREEN   0x07D0u   // (0,248,128)  approx
+#define C_GREEN   0x068Au   // (0,210,80)   approx
 #define C_BLUE    0x023Fu   // (0,68,255)   approx — corrected from 0x021F
 #define C_ORANGE  0xFC40u   // (255,136,0)  approx
 #define C_PURPLE  0x780Fu   // (120,0,120)  approx
