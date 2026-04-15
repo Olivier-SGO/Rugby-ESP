@@ -7,9 +7,28 @@ Output: data/logos/{slug}.bin (64x64) and data/logos/{slug}_sm.bin (16x16)
 Requirements: pip install Pillow requests
 """
 
-import os, struct, requests
+import os, sys, struct, requests
 from io import BytesIO
 from PIL import Image
+
+# macOS: ensure Homebrew cairo is findable for cairosvg
+if sys.platform == "darwin":
+    for brew_lib in ("/opt/homebrew/lib", "/usr/local/lib"):
+        if os.path.exists(os.path.join(brew_lib, "libcairo.2.dylib")):
+            os.environ.setdefault("DYLD_LIBRARY_PATH",
+                                  brew_lib + ":" + os.environ.get("DYLD_LIBRARY_PATH", ""))
+            break
+
+def _open_image(data: bytes, url: str) -> Image.Image:
+    """Open image bytes, handling SVG via cairosvg if needed."""
+    if url.endswith(".svg") or b"<svg" in data[:512]:
+        try:
+            import cairosvg
+            png_data = cairosvg.svg2png(bytestring=data, output_width=256, output_height=256)
+            return Image.open(BytesIO(png_data)).convert("RGBA")
+        except ImportError:
+            raise RuntimeError("SVG detected but cairosvg not installed. Run: pip install cairosvg")
+    return Image.open(BytesIO(data)).convert("RGBA")
 
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "logos")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -23,9 +42,10 @@ def to_rgb565(url_or_path, target_size, out_path):
             r = requests.get(url_or_path, timeout=10,
                              headers={"User-Agent": "Mozilla/5.0"})
             r.raise_for_status()
-            img = Image.open(BytesIO(r.content)).convert("RGBA")
+            img = _open_image(r.content, url_or_path)
         else:
-            img = Image.open(url_or_path).convert("RGBA")
+            with open(url_or_path, "rb") as fh:
+                img = _open_image(fh.read(), url_or_path)
 
         # Auto-crop transparent padding
         bbox = img.split()[3].getbbox()
@@ -84,10 +104,10 @@ CLUBS = [
     ("leinster",        "https://media-cdn.incrowdsports.com/02ec4396-a5c2-49b2-bd5d-4056277b1278.png"),
     ("bath",            "https://media-cdn.incrowdsports.com/f4d9a293-9086-41bf-aa1b-c98d1c62fe3b.png"),
     ("glasgow",         "https://media-cdn.incrowdsports.com/f0e4ca1a-3001-42d4-a134-befe8348540c.png"),
-    ("munster",         "https://media-cdn.incrowdsports.com/2bdb5b2a-58f9-4e57-9b1e-a86e3d1a30b1.png"),
-    ("ulster",          "https://media-cdn.incrowdsports.com/c1756e7d-31d2-41be-b4eb-5c9f2f0bb7f5.png"),
-    ("northampton",     "https://media-cdn.incrowdsports.com/0d08a9b6-a3b9-4b8c-a8e8-f2e7c5b3d4a1.png"),
-    ("exeter",          "https://media-cdn.incrowdsports.com/3e9f1c2a-4d5b-6e7f-8a9b-0c1d2e3f4a5b.png"),
+    ("munster",         "https://ih1.redbubble.net/image.2984596055.4307/flat,750x,075,f-pad,750x1000,f8f8f8.jpg"),
+    ("ulster",          "https://upload.wikimedia.org/wikipedia/fr/c/c0/Ulster_Rugby_logo.svg"),
+    ("northampton",     "https://upload.wikimedia.org/wikipedia/fr/thumb/9/92/Logo_Northampton_Saints_2024.png/250px-Logo_Northampton_Saints_2024.png"),
+    ("exeter",          "https://c.files.bbci.co.uk/AEDA/production/_123026744_exeterchiefsmasterlogorgbwhite2022-01.jpg"),
 ]
 
 print("Converting logos...")
