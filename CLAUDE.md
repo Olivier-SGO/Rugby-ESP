@@ -24,15 +24,22 @@ Full spec: `prompt_ESP.md`. Design doc: `docs/superpowers/specs/2026-04-14-rugby
 
 ## Build System
 
+PlatformIO path on this machine: `~/Library/Python/3.9/bin/pio`
+
 ```bash
-pio run                          # build
-pio run --target upload          # upload firmware
-pio run --target uploadfs        # upload LittleFS (logos, HTML, config)
-pio device monitor --baud 115200 # serial monitor
+pio run -e matrixportal_s3              # build for hardware
+pio run -e wokwi                        # build for Wokwi simulator
+pio run --target upload                 # upload firmware to board
+pio run --target uploadfs               # upload LittleFS (logos, index.html)
+pio device monitor --baud 115200        # serial monitor
+python3 tools/convert_logos.py          # regenerate logos → data/logos/*.bin
 ```
+
+**Simulateur Wokwi** : `pio run -e wokwi` puis ouvrir `diagram.json` dans VS Code (extension Wokwi). Web UI sur `http://localhost:8888`. WiFi = `Wokwi-GUEST` (injecté automatiquement via build flags).
 
 Key `platformio.ini` flags:
 - Stack size for HTTP/JSON tasks: **16KB** (FreeRTOS default 2KB crashes silently)
+- Include paths: `-I src -I src/data -I src/display -I src/web` (requis pour includes cross-répertoires)
 - No `BOARD_HAS_PSRAM` / no `qio_opi` — this board has no PSRAM
 
 ---
@@ -179,3 +186,18 @@ Full mapping in `include/TeamData.h` (ported from `rugby_display/data/team_data.
 - `rugby_display/display/scenes/scoreboard.py` — inline/stacked layout
 - `rugby_display/display/scenes/fixtures.py` — fixtures with Paris dates
 - `rugby_display/display/scenes/standings.py` — standings layout
+
+---
+
+## État d'implémentation (2026-04-15)
+
+**Firmware complet et compilable.** RAM 31%, Flash 53%. Hardware non encore disponible — tester via Wokwi.
+
+Tous les fichiers du plan `docs/superpowers/plans/2026-04-14-rugby-esp32.md` sont implémentés.
+
+### Gotchas découverts à l'implémentation
+
+- `TeamData.h::stripAccents` : le champ `char to` doit être initialisé avec `'e'` (char literal), pas `"e"` (string literal) — erreur de compilation `-fpermissive`
+- WDT : utiliser `esp_task_wdt_init(timeout_s, true)` — `esp_task_wdt_config_t` / `esp_task_wdt_reconfigure` n'existent pas dans Arduino ESP32 framework 3.x
+- Logo SVG (ex: Ulster) : Pillow ne supporte pas SVG nativement → utiliser `cairosvg` + cairo via Homebrew (`/opt/homebrew/lib/`)
+- Logos gitignorés (`*.bin`, `data/logos/`) — régénérer avec `python3 tools/convert_logos.py`
