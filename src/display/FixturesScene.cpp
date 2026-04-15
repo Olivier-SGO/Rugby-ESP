@@ -1,0 +1,75 @@
+#include "FixturesScene.h"
+#include "LogoLoader.h"
+#include "DisplayManager.h"
+#include "config.h"
+#include "fonts/AtkinsonHyperlegible8pt7b.h"
+#include "fonts/AtkinsonHyperlegible10pt7b.h"
+#include <Arduino.h>
+#include <time.h>
+
+static const char* DAYS_FR[]   = {"Dim","Lun","Mar","Mer","Jeu","Ven","Sam"};
+static const char* MONTHS_FR[] = {"","jan","fev","mar","avr","mai","jun",
+                                   "jul","aou","sep","oct","nov","dec"};
+
+void FixturesScene::setMatch(const MatchData& m, const char* comp,
+                              uint16_t headerColor, uint8_t index, uint8_t total) {
+    _match = m; strlcpy(_comp, comp, sizeof(_comp));
+    _headerColor = headerColor; _index = index; _total = total;
+}
+
+void FixturesScene::onActivate() {
+    delete[] _homeLogo; delete[] _awayLogo;
+    _homeLogo = loadLogo(_match.home_slug);
+    _awayLogo = loadLogo(_match.away_slug);
+}
+
+void FixturesScene::render() {
+    Display.fillScreen(C_BLACK);
+
+    // Logos
+    if (_homeLogo) Display.drawBitmap565(0, 0, LOGO_LG_W, LOGO_LG_H, _homeLogo);
+    if (_awayLogo) Display.drawBitmap565(DISPLAY_W - LOGO_LG_W, 0, LOGO_LG_W, LOGO_LG_H, _awayLogo);
+
+    const GFXfont* f8  = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+    const GFXfont* f10 = (const GFXfont*)&AtkinsonHyperlegible10pt7b;
+    int16_t x1, y1; uint16_t tw, th;
+
+    // Header
+    Display.getTextBounds(_comp, 0, 0, &x1, &y1, &tw, &th, f8);
+    Display.drawText(CENTER_MID - tw/2, 10, _comp, _headerColor, f8);
+
+    // Team abbreviations flanking center
+    Display.getTextBounds(_match.away_abbrev, 0, 0, &x1, &y1, &tw, &th, f8);
+    Display.drawText(CENTER_X + 4, 28, _match.home_abbrev, C_WHITE, f8);
+    Display.drawText(CENTER_X + CENTER_W - tw - 4, 28, _match.away_abbrev, C_WHITE, f8);
+
+    // Date + time centered
+    if (_match.kickoff_utc > 0) {
+        struct tm* t = localtime(&_match.kickoff_utc);
+        char dateLine[24];
+        snprintf(dateLine, sizeof(dateLine), "%s %d %s",
+                 DAYS_FR[t->tm_wday], t->tm_mday, MONTHS_FR[t->tm_mon + 1]);
+
+        Display.getTextBounds(dateLine, 0, 0, &x1, &y1, &tw, &th, f10);
+        Display.drawText(CENTER_MID - tw/2, 40, dateLine, C_GOLD, f10);
+
+        // Show time only if not TBD (hour > 2 or minute != 0)
+        if (!(t->tm_hour <= 2 && t->tm_min == 0)) {
+            char timeLine[8];
+            snprintf(timeLine, sizeof(timeLine), "%02d:%02d", t->tm_hour, t->tm_min);
+            Display.getTextBounds(timeLine, 0, 0, &x1, &y1, &tw, &th, f10);
+            Display.drawText(CENTER_MID - tw/2, 54, timeLine, C_GOLD, f10);
+        }
+    } else {
+        Display.getTextBounds("Horaire TBD", 0, 0, &x1, &y1, &tw, &th, f8);
+        Display.drawText(CENTER_MID - tw/2, 42, "Horaire TBD", C_GREY, f8);
+    }
+
+    // Counter
+    char counter[8];
+    snprintf(counter, sizeof(counter), "%d/%d", _index + 1, _total);
+    Display.getTextBounds(counter, 0, 0, &x1, &y1, &tw, &th, f8);
+    Display.drawText(DISPLAY_W - tw - 2, 62, counter, C_GREY, f8);
+
+    Display.flip();
+}
