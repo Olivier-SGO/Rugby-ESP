@@ -65,15 +65,15 @@ static const TeamEntry TEAM_TABLE[] = {
 inline const char* stripAccents(const char* src, char* dst, size_t dstLen) {
     if (!src || !dst || dstLen == 0) { if (dst && dstLen > 0) dst[0] = '\0'; return dst; }  // add this line
     static const struct { const char* from; char to; } MAP[] = {
-        {"é","e"},{"è","e"},{"ê","e"},{"ë","e"},
-        {"à","a"},{"â","a"},{"ä","a"},
-        {"î","i"},{"ï","i"},
-        {"ô","o"},{"ö","o"},
-        {"û","u"},{"ù","u"},{"ü","u"},
-        {"ç","c"},
-        {"É","E"},{"È","E"},{"Ê","E"},
-        {"À","A"},{"Â","A"},
-        {"Î","I"},{"Ô","O"},{"Û","U"},{"Ç","C"},
+        {"é",'e'},{"è",'e'},{"ê",'e'},{"ë",'e'},
+        {"à",'a'},{"â",'a'},{"ä",'a'},
+        {"î",'i'},{"ï",'i'},
+        {"ô",'o'},{"ö",'o'},
+        {"û",'u'},{"ù",'u'},{"ü",'u'},
+        {"ç",'c'},
+        {"É",'E'},{"È",'E'},{"Ê",'E'},
+        {"À",'A'},{"Â",'A'},
+        {"Î",'I'},{"Ô",'O'},{"Û",'U'},{"Ç",'C'},
         {nullptr, 0}
     };
     size_t i = 0, j = 0;
