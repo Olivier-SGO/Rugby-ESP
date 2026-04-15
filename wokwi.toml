@@ -1,0 +1,8 @@
+[wokwi]
+version = 1
+elf = ".pio/build/matrixportal_s3/firmware.elf"
+firmware = ".pio/build/matrixportal_s3/firmware.bin"
+
+[[net.forward]]
+from = "localhost:8888"
+to = "device:80"

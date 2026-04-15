@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "author": "Rugby ESP32 Display",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-adafruit-matrix-portal-s3",
+      "id": "mcu",
+      "top": 200,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-rgb-matrix",
+      "id": "matrix1",
+      "top": 0,
+      "left": -100,
+      "attrs": { "cols": "128", "rows": "64" }
+    },
+    {
+      "type": "wokwi-rgb-matrix",
+      "id": "matrix2",
+      "top": 0,
+      "left": 540,
+      "attrs": { "cols": "128", "rows": "64" }
+    }
+  ],
+  "connections": [
+    ["mcu:MTRX-R1",  "matrix1:R1",  "red",    []],
+    ["mcu:MTRX-G1",  "matrix1:G1",  "green",  []],
+    ["mcu:MTRX-B1",  "matrix1:B1",  "blue",   []],
+    ["mcu:MTRX-R2",  "matrix1:R2",  "red",    []],
+    ["mcu:MTRX-G2",  "matrix1:G2",  "green",  []],
+    ["mcu:MTRX-B2",  "matrix1:B2",  "blue",   []],
+    ["mcu:MTRX-A",   "matrix1:A",   "orange", []],
+    ["mcu:MTRX-B",   "matrix1:B",   "orange", []],
+    ["mcu:MTRX-C",   "matrix1:C",   "orange", []],
+    ["mcu:MTRX-D",   "matrix1:D",   "orange", []],
+    ["mcu:MTRX-E",   "matrix1:E",   "orange", []],
+    ["mcu:MTRX-CLK", "matrix1:CLK", "gray",   []],
+    ["mcu:MTRX-LAT", "matrix1:LAT", "gray",   []],
+    ["mcu:MTRX-OE",  "matrix1:OE",  "gray",   []],
+    ["matrix1:DOUT-R1", "matrix2:R1",  "red",    []],
+    ["matrix1:DOUT-G1", "matrix2:G1",  "green",  []],
+    ["matrix1:DOUT-B1", "matrix2:B1",  "blue",   []],
+    ["matrix1:DOUT-R2", "matrix2:R2",  "red",    []],
+    ["matrix1:DOUT-G2", "matrix2:G2",  "green",  []],
+    ["matrix1:DOUT-B2", "matrix2:B2",  "blue",   []],
+    ["mcu:MTRX-A",      "matrix2:A",   "orange", []],
+    ["mcu:MTRX-B",      "matrix2:B",   "orange", []],
+    ["mcu:MTRX-C",      "matrix2:C",   "orange", []],
+    ["mcu:MTRX-D",      "matrix2:D",   "orange", []],
+    ["mcu:MTRX-E",      "matrix2:E",   "orange", []],
+    ["mcu:MTRX-CLK",    "matrix2:CLK", "gray",   []],
+    ["mcu:MTRX-LAT",    "matrix2:LAT", "gray",   []],
+    ["mcu:MTRX-OE",     "matrix2:OE",  "gray",   []]
+  ],
+  "dependencies": {}
+}
