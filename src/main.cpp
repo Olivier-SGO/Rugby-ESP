@@ -13,6 +13,7 @@
 #include "MatchDB.h"
 #include "DataFetcher.h"
 #include "WebServer.h"
+#include "LogoCache.h"
 
 // MatrixPortal S3 onboard NeoPixel
 #define NEO_PIN   4
@@ -81,12 +82,20 @@ void setup() {
     if (!LittleFS.begin(false)) {
         Serial.println("LittleFS mount failed (run uploadfs)");
     } else {
-        // Check a known file to confirm uploadfs was done
         if (LittleFS.exists("/logos/toulouse.bin")) {
             Serial.println("LittleFS: logos OK");
         } else {
             Serial.println("LittleFS: logos MISSING — run: pio run -e matrixportal_s3 --target uploadfs");
         }
+        initLogoCache();
+    }
+
+    if (psramFound()) {
+        Serial.printf("PSRAM: %u MB total, %u MB free\n",
+                      ESP.getPsramSize() / (1024*1024),
+                      ESP.getFreePsram() / (1024*1024));
+    } else {
+        Serial.println("PSRAM: NOT detected");
     }
 
     DB.begin();

@@ -24,11 +24,6 @@ void StandingsScene::setData(const StandingEntry* standings, uint8_t count, cons
 
 void StandingsScene::onActivate() {
     _scrollY = 0.0f;
-    for (int c = 0; c < LOGO_CACHE; c++) {
-        delete[] _logoCache[c];
-        _logoCache[c] = nullptr;
-        _cacheStandingIdx[c] = -1;
-    }
 }
 
 void StandingsScene::render() {
@@ -51,15 +46,10 @@ void StandingsScene::render() {
         const StandingEntry& e = _standings[i];
         uint16_t col = rankColor(e.rank);
 
-        // Mini logo — cached to avoid LittleFS thrashing at 30fps
-        int slot = i % LOGO_CACHE;
-        if (_cacheStandingIdx[slot] != i) {
-            delete[] _logoCache[slot];
-            _logoCache[slot] = loadLogo(e.slug, true);
-            _cacheStandingIdx[slot] = i;
-        }
-        if (_logoCache[slot])
-            Display.drawBitmap565(2, y + (ROW_H - LOGO_SM_H)/2, LOGO_SM_W, LOGO_SM_H, _logoCache[slot]);
+        // Mini logo — served directly from PSRAM cache (no allocation, no I/O)
+        const uint16_t* logo = loadLogo(e.slug, true);
+        if (logo)
+            Display.drawBitmap565(2, y + (ROW_H - LOGO_SM_H)/2, LOGO_SM_W, LOGO_SM_H, logo);
 
         // Rank + name
         char rankStr[4];

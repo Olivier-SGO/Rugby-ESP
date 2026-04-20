@@ -29,7 +29,6 @@ void FixturesScene::setMatch(const MatchData& m, const char* comp,
 }
 
 void FixturesScene::onActivate() {
-    delete[] _homeLogo; delete[] _awayLogo;
     _homeLogo = loadLogo(_md.home_slug);
     _awayLogo = loadLogo(_md.away_slug);
     _compIdx  = compIndex(_comp);

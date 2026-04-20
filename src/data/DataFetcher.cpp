@@ -83,7 +83,7 @@ void DataFetcher::loop() {
     uint32_t pollMs = live ? POLL_LIVE_MS : POLL_NORMAL_MS;
     if (now - _lastIdalgo > pollMs || _lastIdalgo == 0) {
         if (_rendererHandle) vTaskSuspend(_rendererHandle);
-        Scenes.freeAllLogos();  // reclaim logo heap before TLS alloc (~16KB per active scene)
+        Scenes.freeAllLogos();  // no-op: logos are in PSRAM, but keep suspend/resume for safety
         if (live)
             fetchLive();
         else

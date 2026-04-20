@@ -52,8 +52,8 @@ void SceneManager::tick() {
 void SceneManager::markDirty() { _dirty = true; }
 
 void SceneManager::freeAllLogos() {
-    for (int i = 0; i < MAX_SCORE_SCENES; i++) _scoreScenes[i].freeLogos();
-    for (int i = 0; i < MAX_FIX_SCENES;   i++) _fixScenes[i].freeLogos();
+    // No-op: all logos are pre-loaded into PSRAM at boot.
+    // Previously this freed per-scene SRAM buffers to make room for TLS heap.
 }
 
 void SceneManager::nextScene() {

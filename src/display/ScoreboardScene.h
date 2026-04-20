@@ -12,7 +12,7 @@ public:
 
     void onActivate() override;
     void render() override;
-    void freeLogos() { delete[] _homeLogo; _homeLogo = nullptr; delete[] _awayLogo; _awayLogo = nullptr; }
+    void freeLogos() {}  // logos are in PSRAM, never freed per-scene
     uint32_t durationMs() const override { return SCENE_SCORE_MS; }
 
 private:
@@ -21,8 +21,8 @@ private:
     uint16_t  _headerColor;
     uint8_t   _index, _total;
     int       _compIdx = 0;
-    uint16_t* _homeLogo = nullptr;
-    uint16_t* _awayLogo = nullptr;
+    const uint16_t* _homeLogo = nullptr;
+    const uint16_t* _awayLogo = nullptr;
 
     void drawHeader();
     void drawLogos();
