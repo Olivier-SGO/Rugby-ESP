@@ -24,7 +24,7 @@ static const TeamEntry TEAM_TABLE[] = {
   {"Castres",             "Castres Olympique",            "Castres Olympique",      "Castres",           "CO",   "castres"},
   {"Bayonne",             "Aviron Bayonnais",             "Bayonne",                "Bayonne",           "AB",   "bayonne"},
   {"Pau",                 "Section Paloise",              "Section Paloise",        "Pau",               "PAU",  "pau"},
-  {"Perpignan",           "USA Perpignan",                "USA Perpignan",          "Perpignan",         "USA",  "perpignan"},
+  {"Perpignan",           "USA Perpignan",                "USA Perpignan",          "Perpignan",         "USAP", "perpignan"},
   {"Vannes",              "RC Vannes",                    "RC Vannes",              "Vannes",            "RCV",  "vannes"},
   // Pro D2
   {"Montauban",           "US Montauban",                 "US Montauban",           "Montauban",         "USM",  "montauban"},
@@ -39,20 +39,27 @@ static const TeamEntry TEAM_TABLE[] = {
   {"Provence Rugby",      "Provence Rugby",               "Provence Rugby",         "Provence",          "PR",   "provence"},
   {"Angouleme",           "Soyaux Angouleme XV",          "Soyaux Angouleme",       "Angouleme",         "SAXV", "angouleme"},
   {"Narbonne",            "RC Narbonne",                  "Narbonne",               "Narbonne",          "RCN",  "narbonne"},
+  {"Beziers",             "AS Beziers",                   "Beziers",                "Beziers",           "ASB",  "beziers"},
+  {"Agen",                "SU Agen",                      "Agen",                   "Agen",              "SUA",  "agen"},
+  {"Biarritz",            "Biarritz Olympique",           "Biarritz",               "Biarritz",          "BO",   "biarritz"},
+  {"Mont-de-Marsan",      "Stade Montois",                "Mont-de-Marsan",         "Mont-de-Marsan",    "SMR",  "mont-de-marsan"},
+  {"Mont de Marsan",      "Stade Montois",                "Mont de Marsan",         "Mont-de-Marsan",    "SMR",  "mont-de-marsan"},
+  {"Dax",                 "US Dax",                       "Dax",                    "Dax",               "USD",  "dax"},
+  {"Colomiers",           "US Colomiers",                 "Colomiers",              "Colomiers",         "USC",  "colomiers"},
   // Champions Cup (non-French clubs)
   {"Leinster",            "Leinster Rugby",               "",                       "Leinster",          "LEI",  "leinster"},
   {"Munster",             "Munster Rugby",                "",                       "Munster",           "MUN",  "munster"},
   {"Ulster",              "Ulster Rugby",                 "",                       "Ulster",            "ULS",  "ulster"},
   {"Connacht",            "Connacht Rugby",               "",                       "Connacht",          "CON",  "connacht"},
-  {"Bath Rugby",          "Bath Rugby",                   "",                       "Bath",              "BAT",  "bath"},
-  {"Sale Sharks",         "Sale Sharks",                  "",                       "Sale",              "SAL",  "sale"},
-  {"Northampton Saints",  "Northampton Saints",           "",                       "Northampton",       "NOR",  "northampton"},
-  {"Gloucester Rugby",    "Gloucester Rugby",             "",                       "Gloucester",        "GLO",  "gloucester"},
-  {"Bristol Bears",       "Bristol Rugby",                "",                       "Bristol",           "BRI",  "bristol"},
+  {"Bath",                "Bath Rugby",                   "",                       "Bath",              "BAT",  "bath"},
+  {"Sale",                "Sale Sharks",                  "",                       "Sale",              "SAL",  "sale"},
+  {"Northampton",         "Northampton Saints",           "",                       "Northampton",       "NOR",  "northampton"},
+  {"Gloucester",          "Gloucester Rugby",             "",                       "Gloucester",        "GLO",  "gloucester"},
+  {"Bristol",             "Bristol Rugby",                "",                       "Bristol",           "BRI",  "bristol"},
   {"Harlequins",          "Harlequins",                   "",                       "Harlequins",        "HAR",  "harlequins"},
-  {"Exeter Chiefs",       "Exeter Chiefs",                "",                       "Exeter",            "EXE",  "exeter"},
-  {"Glasgow Warriors",    "Glasgow Warriors",             "",                       "Glasgow",           "GLA",  "glasgow"},
-  {"Edinburgh Rugby",     "Edinburgh Rugby",              "",                       "Edinburgh",         "EDI",  "edinburgh"},
+  {"Exeter",              "Exeter Chiefs",                "",                       "Exeter",            "EXE",  "exeter"},
+  {"Glasgow",             "Glasgow Warriors",             "",                       "Glasgow",           "GLA",  "glasgow"},
+  {"Edinburgh",           "Edinburgh Rugby",              "",                       "Edinburgh",         "EDI",  "edinburgh"},
   {"Scarlets",            "Scarlets",                     "",                       "Scarlets",          "SCL",  "scarlets"},
   {"Stormers",            "DHL Stormers",                 "",                       "Stormers",          "STO",  "stormers"},
   {"Bulls",               "Vodacom Bulls",                "",                       "Bulls",             "BUL",  "bulls"},
@@ -94,14 +101,27 @@ inline const char* stripAccents(const char* src, char* dst, size_t dstLen) {
     return dst;
 }
 
-// Find team entry by any source name (Idalgo, WorldRugby, or LNR)
+// Find team entry by any source name (Idalgo, WorldRugby, or LNR).
+// Compares both raw and accent-stripped to handle HTML encoding variations.
 inline const TeamEntry* findTeam(const char* name) {
-    if (!name || !name[0]) return nullptr;   // add this line
+    if (!name || !name[0]) return nullptr;
+    char stripped[64];
+    stripAccents(name, stripped, sizeof(stripped));
     for (int i = 0; TEAM_TABLE[i].idalgo; i++) {
         if (strcasecmp(name, TEAM_TABLE[i].idalgo)    == 0) return &TEAM_TABLE[i];
         if (strcasecmp(name, TEAM_TABLE[i].worldrugby) == 0) return &TEAM_TABLE[i];
         if (TEAM_TABLE[i].lnr[0] && strcasecmp(name, TEAM_TABLE[i].lnr) == 0)
             return &TEAM_TABLE[i];
+        // Retry with accent-stripped comparison
+        char si[64], sw[64], sl[64];
+        stripAccents(TEAM_TABLE[i].idalgo,    si, sizeof(si));
+        stripAccents(TEAM_TABLE[i].worldrugby, sw, sizeof(sw));
+        if (strcasecmp(stripped, si) == 0) return &TEAM_TABLE[i];
+        if (strcasecmp(stripped, sw) == 0) return &TEAM_TABLE[i];
+        if (TEAM_TABLE[i].lnr[0]) {
+            stripAccents(TEAM_TABLE[i].lnr, sl, sizeof(sl));
+            if (strcasecmp(stripped, sl) == 0) return &TEAM_TABLE[i];
+        }
     }
     return nullptr;
 }

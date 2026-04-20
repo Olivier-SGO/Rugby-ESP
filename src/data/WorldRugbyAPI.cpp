@@ -1,14 +1,13 @@
 #include "WorldRugbyAPI.h"
 #include "TeamData.h"
 #include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <Arduino.h>
 
-bool WorldRugbyAPI::fetchFixtures(const char* compId, CompetitionData& out) {
+bool WorldRugbyAPI::fetchFixtures(const char* compId, CompetitionData& out, WiFiClientSecure& client) {
     out.fixture_count = 0;
 
-    // Always use today-1 to today+14 — startDate==endDate returns HTTP 400
     time_t now; time(&now);
     struct tm tm_start = *gmtime(&now);
     tm_start.tm_mday -= 1; mktime(&tm_start);
@@ -25,15 +24,17 @@ bool WorldRugbyAPI::fetchFixtures(const char* compId, CompetitionData& out) {
         compId);
 
     HTTPClient http;
-    WiFiClientSecure* client = new WiFiClientSecure;
-    client->setInsecure();
-    http.begin(*client, url);
+    http.begin(client, url);
     int code = http.GET();
-    if (code != 200) { http.end(); delete client; return false; }
+    if (code != 200) {
+        Serial.printf("WorldRugby HTTP %d\n", code);
+        http.end();
+        return false;
+    }
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, *http.getStreamPtr());
-    http.end(); delete client;
+    // http destructor runs after return, client still alive (owned by caller)
     if (err) return false;
 
     JsonArray matches = doc["content"].as<JsonArray>();
@@ -41,7 +42,7 @@ bool WorldRugbyAPI::fetchFixtures(const char* compId, CompetitionData& out) {
         if (out.fixture_count >= CompetitionData::MAX_MATCHES) break;
 
         const char* statusType = m["status"]["type"] | "U";
-        if (strcmp(statusType, "U") != 0) continue; // only upcoming
+        if (strcmp(statusType, "U") != 0) continue;
 
         MatchData fix = {};
         fix.home_score = -1; fix.away_score = -1;
@@ -72,7 +73,6 @@ bool WorldRugbyAPI::fetchFixtures(const char* compId, CompetitionData& out) {
 }
 
 bool WorldRugbyAPI::isTBD(time_t kickoffUtc) {
-    // WorldRugby returns 00:00:00 UTC for TBD → Paris ≤ 02:00
     struct tm* t = localtime(&kickoffUtc);
     return (t->tm_hour == 0 || t->tm_hour == 1 || t->tm_hour == 2) && t->tm_min == 0;
 }

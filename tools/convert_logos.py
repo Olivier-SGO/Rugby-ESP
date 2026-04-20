@@ -78,7 +78,7 @@ CLUBS = [
     ("bordeaux-begles", None),
     ("la-rochelle",     None),
     ("clermont",        None),
-    ("toulon",          "https://cdn.lnr.fr/club/toulon/photo/logo-thumbnail-2x.5ab42ba7610b284f40f993f6a452bec5362fa8b6"),
+    ("toulon",          "https://upload.wikimedia.org/wikipedia/fr/5/5a/Logo_Rugby_club_toulonnais.svg"),
     ("montpellier",     None),
     ("lyon",            None),
     ("paris",           None),
@@ -100,6 +100,13 @@ CLUBS = [
     ("provence",        "https://cdn.lnr.fr/club/provence-rugby/photo/logo-thumbnail-2x.5ab42ba7610b284f40f993f6a452bec5362fa8b6"),
     ("angouleme",       None),
     ("narbonne",        None),
+    # Pro D2 (additional)
+    ("agen",            None),
+    ("biarritz",        "https://upload.wikimedia.org/wikipedia/fr/thumb/9/94/B_O.svg/250px-B_O.svg.png"),
+    ("mont-de-marsan",  None),
+    ("dax",             None),
+    ("beziers",         None),
+    ("colomiers",       None),
     # Champions Cup (non-French)
     ("leinster",        "https://media-cdn.incrowdsports.com/02ec4396-a5c2-49b2-bd5d-4056277b1278.png"),
     ("bath",            "https://media-cdn.incrowdsports.com/f4d9a293-9086-41bf-aa1b-c98d1c62fe3b.png"),
@@ -110,10 +117,59 @@ CLUBS = [
     ("exeter",          "https://c.files.bbci.co.uk/AEDA/production/_123026744_exeterchiefsmasterlogorgbwhite2022-01.jpg"),
 ]
 
-print("Converting logos...")
+print("Converting club logos...")
 for slug, override in CLUBS:
     url = override or LNR_CDN.format(slug=slug)
     to_rgb565(url, LG, os.path.join(OUTPUT_DIR, f"{slug}.bin"))
     to_rgb565(url, SM, os.path.join(OUTPUT_DIR, f"{slug}_sm.bin"))
+
+def to_rgb565_aspect(url_or_path, target_h, max_w, out_path):
+    """Resize to target_h pixels tall, preserving aspect ratio, up to max_w wide."""
+    try:
+        if url_or_path.startswith("http"):
+            r = requests.get(url_or_path, timeout=10,
+                             headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            img = _open_image(r.content, url_or_path)
+        else:
+            with open(url_or_path, "rb") as fh:
+                img = _open_image(fh.read(), url_or_path)
+
+        bbox = img.split()[3].getbbox()
+        if bbox:
+            img = img.crop(bbox)
+
+        nat_w, nat_h = img.size
+        target_w = max(2, min(round(nat_w * target_h / nat_h), max_w))
+        target_size = (target_w, target_h)
+
+        img = img.resize(target_size, Image.LANCZOS)
+        bg = Image.new("RGB", target_size, (0, 0, 0))
+        bg.paste(img, mask=img.split()[3])
+
+        with open(out_path, "wb") as f:
+            for y in range(target_h):
+                for x in range(target_w):
+                    r_, g, b = bg.getpixel((x, y))
+                    px = ((r_ & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+                    f.write(struct.pack(">H", px))
+        print(f"  OK  {os.path.basename(out_path)} ({target_w}x{target_h})")
+    except Exception as e:
+        print(f"  ERR {os.path.basename(out_path)}: {e}")
+
+COMP_H    = 40
+COMP_MAX_W = 48
+COMP_SM_H = 24
+COMP_SM_MAX_W = 28
+
+COMP_LOGOS = [
+    ("comp_top14", "https://assets.lnr.fr/1/1/1/8/0/7/conversions/logo-top14.e32e7e9a-logo.webp"),
+    ("comp_prod2", "https://assets.lnr.fr/8/8/9/4/1/conversions/LOGO_PROD2-logo.webp"),
+    ("comp_cc",    "https://media-cdn.incrowdsports.com/77535d85-bcdc-49b9-9dc9-879e70d9adba.svg?format=webp&width=1920"),
+]
+print("\nConverting competition logos (aspect-ratio preserving)...")
+for slug, url in COMP_LOGOS:
+    to_rgb565_aspect(url, COMP_H,    COMP_MAX_W,    os.path.join(OUTPUT_DIR, f"{slug}.bin"))
+    to_rgb565_aspect(url, COMP_SM_H, COMP_SM_MAX_W, os.path.join(OUTPUT_DIR, f"{slug}_sm.bin"))
 
 print(f"\nDone. Upload with: pio run --target uploadfs")

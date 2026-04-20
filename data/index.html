@@ -5,13 +5,27 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Rugby Display</title>
 <style>
-body{font-family:sans-serif;background:#111;color:#eee;max-width:400px;margin:40px auto;padding:16px}
-h1{color:#4af}
-button,input[type=range]{margin:8px 0;padding:8px 16px;border-radius:4px;border:none;cursor:pointer}
-button{background:#4af;color:#000;width:100%}
-.danger{background:#f44}
-label{display:block;margin:8px 0}
-#status{background:#222;padding:12px;border-radius:4px;font-size:12px;white-space:pre}
+*{box-sizing:border-box}
+body{font-family:sans-serif;background:#111;color:#eee;max-width:420px;margin:0 auto;padding:16px}
+h1{color:#4af;margin:0 0 12px}
+h2{color:#aaa;font-size:14px;text-transform:uppercase;letter-spacing:1px;margin:20px 0 8px}
+#status{background:#1a1a1a;padding:10px;border-radius:6px;font-size:11px;white-space:pre;color:#888;margin-bottom:4px}
+.row{display:flex;align-items:center;gap:12px;margin:6px 0}
+input[type=range]{flex:1;accent-color:#4af}
+.brightval{min-width:28px;text-align:right;font-size:14px}
+.comp-card{background:#1a1a1a;border-radius:8px;padding:12px;margin:8px 0}
+.comp-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.comp-header label{font-size:16px;font-weight:bold;cursor:pointer}
+.comp-header input[type=checkbox]{width:18px;height:18px;accent-color:#4af;cursor:pointer}
+.sub-checks{display:flex;gap:16px;flex-wrap:wrap;padding-left:28px}
+.sub-checks label{display:flex;align-items:center;gap:6px;font-size:14px;color:#bbb;cursor:pointer}
+.sub-checks input[type=checkbox]{width:15px;height:15px;accent-color:#7cf;cursor:pointer}
+.sub-checks.disabled label{color:#555}
+.sub-checks.disabled input{accent-color:#555}
+button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font-size:15px;margin:4px 0}
+.btn-primary{background:#4af;color:#000}
+.btn-danger{background:#c33;color:#fff}
+#save-indicator{font-size:12px;color:#4a4;text-align:right;height:16px;margin:4px 0}
 </style>
 </head>
 <body>
@@ -19,41 +33,171 @@ label{display:block;margin:8px 0}
 <div id="status">Chargement...</div>
 
 <h2>Luminosite</h2>
-<input type="range" id="bright" min="10" max="255" value="80"
-       oninput="setBrightness(this.value)">
-<span id="brightVal">80</span>
+<div class="row">
+  <input type="range" id="bright" min="10" max="255" value="80" oninput="onBright(this.value)">
+  <span class="brightval" id="brightVal">80</span>
+</div>
+
+<h2>Durees (secondes)</h2>
+<div class="row">
+  <label style="min-width:120px;font-size:14px;color:#bbb">Resultats</label>
+  <input type="number" id="score_s" min="3" max="60" value="8" style="width:60px;background:#1a1a1a;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px" onchange="savePrefs()">
+  <span style="font-size:12px;color:#555">s</span>
+</div>
+<div class="row">
+  <label style="min-width:120px;font-size:14px;color:#bbb">Prochains matches</label>
+  <input type="number" id="fixture_s" min="3" max="60" value="8" style="width:60px;background:#1a1a1a;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px" onchange="savePrefs()">
+  <span style="font-size:12px;color:#555">s</span>
+</div>
+<div class="row">
+  <label style="min-width:120px;font-size:14px;color:#bbb">Classement</label>
+  <input type="number" id="standing_s" min="5" max="120" value="20" style="width:60px;background:#1a1a1a;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px" onchange="savePrefs()">
+  <span style="font-size:12px;color:#555">s</span>
+</div>
+
+<h2>Championnats</h2>
+<div id="save-indicator"></div>
+
+<div class="comp-card" id="card-top14">
+  <div class="comp-header">
+    <input type="checkbox" id="en-top14" onchange="onCompToggle('top14')">
+    <label for="en-top14">Top 14</label>
+  </div>
+  <div class="sub-checks" id="sub-top14">
+    <label><input type="checkbox" id="sc-top14" onchange="savePrefs()"> Resultats</label>
+    <label><input type="checkbox" id="fx-top14" onchange="savePrefs()"> Prochains matches</label>
+    <label><input type="checkbox" id="st-top14" onchange="savePrefs()"> Classement</label>
+  </div>
+</div>
+
+<div class="comp-card" id="card-prod2">
+  <div class="comp-header">
+    <input type="checkbox" id="en-prod2" onchange="onCompToggle('prod2')">
+    <label for="en-prod2">Pro D2</label>
+  </div>
+  <div class="sub-checks" id="sub-prod2">
+    <label><input type="checkbox" id="sc-prod2" onchange="savePrefs()"> Resultats</label>
+    <label><input type="checkbox" id="fx-prod2" onchange="savePrefs()"> Prochains matches</label>
+    <label><input type="checkbox" id="st-prod2" onchange="savePrefs()"> Classement</label>
+  </div>
+</div>
+
+<div class="comp-card" id="card-cc">
+  <div class="comp-header">
+    <input type="checkbox" id="en-cc" onchange="onCompToggle('cc')">
+    <label for="en-cc">Champions Cup</label>
+  </div>
+  <div class="sub-checks" id="sub-cc">
+    <label><input type="checkbox" id="sc-cc" onchange="savePrefs()"> Resultats</label>
+    <label><input type="checkbox" id="fx-cc" onchange="savePrefs()"> Prochains matches</label>
+    <label><input type="checkbox" id="st-cc" onchange="savePrefs()"> Classement</label>
+  </div>
+</div>
 
 <h2>Controles</h2>
-<button onclick="nextScene()">Scene suivante</button>
-<button class="danger" onclick="restart()">Redemarrer</button>
+<button class="btn-primary" onclick="nextScene()">Scene suivante</button>
+<button class="btn-danger"  onclick="doRestart()">Redemarrer</button>
 
 <script>
-async function load() {
+const COMPS = ['top14','prod2','cc'];
+
+async function loadStatus() {
   try {
     const r = await fetch('/status');
     const d = await r.json();
-    document.getElementById('status').textContent = JSON.stringify(d, null, 2);
+    document.getElementById('status').textContent =
+      `WiFi: ${d.wifi}  IP: ${d.ip}\nHeap: ${d.heap} octets  Uptime: ${d.uptime}s`;
   } catch(e) {
     document.getElementById('status').textContent = 'Erreur: ' + e;
   }
 }
-async function setBrightness(v) {
+
+async function loadPrefs() {
+  try {
+    const r = await fetch('/prefs');
+    const d = await r.json();
+    for (const k of COMPS) {
+      const p = d[k] || {};
+      cb(`en-${k}`).checked = p.enabled  !== false;
+      cb(`sc-${k}`).checked = p.scores   !== false;
+      cb(`fx-${k}`).checked = p.fixtures !== false;
+      cb(`st-${k}`).checked = p.standings!== false;
+      updateSubState(k);
+    }
+    if (d.score_s    != null) cb('score_s').value    = d.score_s;
+    if (d.fixture_s  != null) cb('fixture_s').value  = d.fixture_s;
+    if (d.standing_s != null) cb('standing_s').value = d.standing_s;
+  } catch(e) {}
+}
+
+function cb(id) { return document.getElementById(id); }
+
+function updateSubState(k) {
+  const en = cb(`en-${k}`).checked;
+  const sub = document.getElementById(`sub-${k}`);
+  sub.classList.toggle('disabled', !en);
+  sub.querySelectorAll('input').forEach(el => el.disabled = !en);
+}
+
+function onCompToggle(k) {
+  updateSubState(k);
+  savePrefs();
+}
+
+let saveTimer = null;
+function savePrefs() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSavePrefs, 400);
+}
+
+async function doSavePrefs() {
+  const body = {};
+  for (const k of COMPS) {
+    body[k] = {
+      enabled:   cb(`en-${k}`).checked,
+      scores:    cb(`sc-${k}`).checked,
+      fixtures:  cb(`fx-${k}`).checked,
+      standings: cb(`st-${k}`).checked,
+    };
+  }
+  body.score_s    = parseInt(cb('score_s').value)    || 8;
+  body.fixture_s  = parseInt(cb('fixture_s').value)  || 8;
+  body.standing_s = parseInt(cb('standing_s').value) || 20;
+  try {
+    await fetch('/prefs', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const ind = document.getElementById('save-indicator');
+    ind.textContent = 'Sauvegarde OK';
+    setTimeout(() => ind.textContent = '', 2000);
+  } catch(e) {
+    document.getElementById('save-indicator').textContent = 'Erreur sauvegarde';
+  }
+}
+
+async function onBright(v) {
   document.getElementById('brightVal').textContent = v;
   await fetch('/config', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type':'application/json'},
     body: JSON.stringify({brightness: parseInt(v)})
   });
 }
+
 async function nextScene() {
   await fetch('/next-scene');
 }
-async function restart() {
+
+async function doRestart() {
   if (confirm('Redemarrer le display?'))
-    await fetch('/restart', {method: 'POST'});
+    await fetch('/restart', {method:'POST'});
 }
-load();
-setInterval(load, 10000);
+
+loadStatus();
+loadPrefs();
+setInterval(loadStatus, 15000);
 </script>
 </body>
 </html>

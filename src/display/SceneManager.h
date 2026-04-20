@@ -3,8 +3,6 @@
 #include "ScoreboardScene.h"
 #include "FixturesScene.h"
 #include "StandingsScene.h"
-#include <vector>
-
 struct SceneSlot {
     Scene*   scene;
     uint32_t durationMs;
@@ -20,16 +18,27 @@ public:
     void nextScene();
     void setLivePriority(bool live);
 
+    // Signal that display content needs one re-render (call after data update)
+    void markDirty();
+
+    // Free all loaded logo bitmaps to reclaim heap before network fetch
+    void freeAllLogos();
+
+    // Rebuild scene list from DB + current prefs (call after prefs change)
+    void rebuildSlots();
+
 private:
     MatchDB* _db = nullptr;
     bool     _livePriority = false;
     uint32_t _lastLiveDetect = 0;
+    bool     _dirty = true;
 
-    std::vector<SceneSlot> _slots;
-    size_t   _current = 0;
-    uint32_t _sceneStart = 0;
+    static constexpr size_t MAX_SLOTS = 48;
+    SceneSlot _slots[MAX_SLOTS];
+    size_t    _slotCount = 0;
+    size_t    _current = 0;
+    uint32_t  _sceneStart = 0;
 
-    void rebuildSlots();
     void activateCurrent();
 
     // Reusable scene objects (avoid heap churn)

@@ -12,13 +12,15 @@ public:
 
     void onActivate() override;
     void render() override;
+    void freeLogos() { delete[] _homeLogo; _homeLogo = nullptr; delete[] _awayLogo; _awayLogo = nullptr; }
     uint32_t durationMs() const override { return SCENE_SCORE_MS; }
 
 private:
-    MatchData _match;
-    char      _comp[16];
+    MatchDisplay _md;
+    char         _comp[16];
     uint16_t  _headerColor;
     uint8_t   _index, _total;
+    int       _compIdx = 0;
     uint16_t* _homeLogo = nullptr;
     uint16_t* _awayLogo = nullptr;
 

@@ -1,4 +1,5 @@
 #include "WebServer.h"
+#include "DisplayPrefs.h"
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
@@ -52,6 +53,53 @@ void WebUI::begin(MatchDB* db) {
     server.on("/next-scene", HTTP_GET, [](AsyncWebServerRequest* req) {
         Scenes.nextScene();
         req->send(200, "text/plain", "OK");
+    });
+
+    // GET /prefs
+    server.on("/prefs", HTTP_GET, [](AsyncWebServerRequest* req) {
+        DisplayPrefs p;
+        loadDisplayPrefs(p);
+        JsonDocument doc;
+        const char* keys[3] = {"top14", "prod2", "cc"};
+        for (int i = 0; i < 3; i++) {
+            doc[keys[i]]["enabled"]   = p.comp[i].enabled;
+            doc[keys[i]]["scores"]    = p.comp[i].scores;
+            doc[keys[i]]["fixtures"]  = p.comp[i].fixtures;
+            doc[keys[i]]["standings"] = p.comp[i].standings;
+        }
+        doc["score_s"]    = p.score_s;
+        doc["fixture_s"]  = p.fixture_s;
+        doc["standing_s"] = p.standing_s;
+        String out; serializeJson(doc, out);
+        req->send(200, "application/json", out);
+    });
+
+    // POST /prefs  body: {"top14":{"enabled":true,"scores":true,...}, "score_s":8, ...}
+    server.on("/prefs", HTTP_POST, [](AsyncWebServerRequest* req) {}, nullptr,
+              [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+        JsonDocument doc;
+        if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+            req->send(400, "application/json", "{\"error\":\"invalid json\"}");
+            return;
+        }
+        DisplayPrefs p;
+        loadDisplayPrefs(p); // start from current values
+        const char* keys[3] = {"top14", "prod2", "cc"};
+        for (int i = 0; i < 3; i++) {
+            if (!doc[keys[i]].isNull()) {
+                if (!doc[keys[i]]["enabled"].isNull())   p.comp[i].enabled   = doc[keys[i]]["enabled"].as<bool>();
+                if (!doc[keys[i]]["scores"].isNull())    p.comp[i].scores    = doc[keys[i]]["scores"].as<bool>();
+                if (!doc[keys[i]]["fixtures"].isNull())  p.comp[i].fixtures  = doc[keys[i]]["fixtures"].as<bool>();
+                if (!doc[keys[i]]["standings"].isNull()) p.comp[i].standings = doc[keys[i]]["standings"].as<bool>();
+            }
+        }
+        if (doc["score_s"].is<int>())    p.score_s    = constrain((int)doc["score_s"],    3, 60);
+        if (doc["fixture_s"].is<int>())  p.fixture_s  = constrain((int)doc["fixture_s"],  3, 60);
+        if (doc["standing_s"].is<int>()) p.standing_s = constrain((int)doc["standing_s"], 5, 120);
+        saveDisplayPrefs(p);
+        Scenes.rebuildSlots();
+        Scenes.markDirty();
+        req->send(200, "application/json", "{\"ok\":true}");
     });
 
     server.begin();

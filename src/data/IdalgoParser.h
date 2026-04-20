@@ -1,19 +1,20 @@
 #pragma once
 #include "MatchData.h"
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 
 class IdalgoParser {
 public:
-    // Fetch URL, stream-parse, fill out. Returns true on success.
-    bool fetch(const char* url, CompetitionData& out);
+    bool fetch(const char* url, CompetitionData& out, WiFiClientSecure& client);
 
 private:
-    static const size_t BUF_SZ   = 8192;
-    static const size_t OVERLAP  = 2048;
+    static const size_t BUF_SZ        = 4096;  // must be > MAX_BLOCK_SCAN
+    static const size_t MAX_BLOCK_SCAN = 2048;  // look for match data within 2KB of data-match
 
-    char _buf[BUF_SZ + OVERLAP + 1];
+    char* _buf = nullptr;
 
-    int parseChunk(const char* chunk, size_t len, CompetitionData& out, bool isLast);
+    // Returns byte offset of deferred content (start of last incomplete match), or len if all done.
+    size_t parseChunk(const char* chunk, size_t len, CompetitionData& out, bool isLast);
     const char* parseMatchBlock(const char* start, const char* end, MatchData& match);
     static bool readAttrVal(const char* html, const char* attr, char* dst, size_t dstLen);
     static bool readClassText(const char* html, const char* cls, char* dst, size_t dstLen);

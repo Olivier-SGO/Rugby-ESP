@@ -54,12 +54,21 @@ void MatchDB::release() {
 }
 
 bool MatchDB::hasLive() const {
+    return liveMask() != 0;
+}
+
+uint8_t MatchDB::liveMask() const {
     auto check = [](const CompetitionData& d) {
         for (int i = 0; i < d.result_count; i++)
             if (d.results[i].status == MatchStatus::Live) return true;
         return false;
     };
-    return check(_top14) || check(_prod2) || check(_cc);
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    uint8_t mask = (check(_top14) ? 1u : 0u)
+                 | (check(_prod2) ? 2u : 0u)
+                 | (check(_cc)    ? 4u : 0u);
+    xSemaphoreGive(_mutex);
+    return mask;
 }
 
 static void serializeMatch(JsonObject obj, const MatchData& m) {

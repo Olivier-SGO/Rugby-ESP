@@ -37,10 +37,17 @@
 #define WDT_TIMEOUT_S       30
 
 // ── Logos ─────────────────────────────────────────────────────────────────────
-#define LOGO_LG_W   64
-#define LOGO_LG_H   64
-#define LOGO_SM_W   16
-#define LOGO_SM_H   16
+#define LOGO_LG_W          64
+#define LOGO_LG_H          64
+#define LOGO_SM_W          16
+#define LOGO_SM_H          16
+// Competition logos: fixed height, variable width (aspect-ratio-correct)
+// Width is derived at runtime from file size; these are buffer upper bounds.
+// Actual widths observed: top14=40, prod2=40, cc=34 (large); top14=24, cc=20 (small).
+#define LOGO_COMP_H        40
+#define LOGO_COMP_MAX_W    48   // buffer capacity in pixels (saves 37KB vs 160)
+#define LOGO_COMP_SM_H     24
+#define LOGO_COMP_SM_MAX_W 28
 
 // ── Scene layout ──────────────────────────────────────────────────────────────
 #define CENTER_X    LOGO_LG_W                  // 64

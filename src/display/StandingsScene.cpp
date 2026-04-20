@@ -1,4 +1,5 @@
 #include "StandingsScene.h"
+#include "CompLogos.h"
 #include "LogoLoader.h"
 #include "DisplayManager.h"
 #include "config.h"
@@ -8,23 +9,21 @@
 
 const float StandingsScene::SCROLL_SPEED = 0.5f; // px per frame → ~15px/sec at 30fps
 
-void StandingsScene::setData(const CompetitionData& data, const char* comp,
+void StandingsScene::setData(const StandingEntry* standings, uint8_t count, const char* comp,
                               uint16_t headerColor, uint8_t playoffCutoff,
                               uint8_t relegationStart) {
-    _data = data;
+    _standing_count = count;
+    for (int i = 0; i < count; i++) _standings[i] = standings[i];
     strlcpy(_comp, comp, sizeof(_comp));
     _headerColor = headerColor;
     _playoffCutoff = playoffCutoff;
     _relegationStart = relegationStart;
-    _contentH = data.standing_count * ROW_H;
+    _contentH = count * ROW_H;
+    _compIdx = compIndex(comp);
 }
 
 void StandingsScene::onActivate() {
     _scrollY = 0.0f;
-    for (int i = 0; i < _data.standing_count; i++) {
-        delete[] _logos[i];
-        _logos[i] = loadLogo(_data.standings[i].slug, true);
-    }
 }
 
 void StandingsScene::render() {
@@ -32,24 +31,23 @@ void StandingsScene::render() {
 
     const GFXfont* f8 = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
 
-    // Fixed header
-    char header[32];
-    snprintf(header, sizeof(header), "%s  CLASSEMENT", _comp);
-    Display.drawText(2, HEADER_H - 2, header, _headerColor, f8);
-    Display.fillRect(0, HEADER_H, DISPLAY_W, 1, C_GREY); // separator line
+    // Fixed header: competition logo + "CLASSEMENT"
+    int sw = gCompLogoSmW[_compIdx];
+    Display.drawBitmap565(2, 2, sw, LOGO_COMP_SM_H, gCompLogoSm[_compIdx]);
+    Display.drawText(sw + 6, HEADER_H - 2, "CLASSEMENT", _headerColor, f8);
+    Display.fillRect(0, HEADER_H, DISPLAY_W, 1, C_GREY);
 
     // Scrolling rows
-    for (int i = 0; i < _data.standing_count; i++) {
+    for (int i = 0; i < _standing_count; i++) {
         int16_t y = HEADER_H + 1 + (int16_t)(i * ROW_H - _scrollY);
         if (y + ROW_H < HEADER_H) continue;
         if (y > DISPLAY_H) break;
 
-        const StandingEntry& e = _data.standings[i];
+        const StandingEntry& e = _standings[i];
         uint16_t col = rankColor(e.rank);
 
-        // Mini logo
-        if (_logos[i])
-            Display.drawBitmap565(2, y + (ROW_H - LOGO_SM_H)/2, LOGO_SM_W, LOGO_SM_H, _logos[i]);
+        // Mini logo — read from LittleFS, no heap allocation
+        drawLogoFromFS(2, y + (ROW_H - LOGO_SM_H)/2, e.slug);
 
         // Rank + name
         char rankStr[4];

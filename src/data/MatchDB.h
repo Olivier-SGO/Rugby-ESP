@@ -20,7 +20,8 @@ public:
     const CompetitionData* acquireCC();
     void release();
 
-    bool hasLive() const;
+    bool    hasLive() const;
+    uint8_t liveMask() const;  // bit0=top14, bit1=prod2, bit2=cc
     void persist();
     void load();
 

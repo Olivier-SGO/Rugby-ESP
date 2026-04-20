@@ -1,27 +1,40 @@
 #pragma once
 #include <Arduino.h>
+#include <WiFiClientSecure.h>
 #include "MatchDB.h"
+#include "IdalgoParser.h"
 
 class DataFetcher {
 public:
     void begin(MatchDB* db);
-    void loop();
+    void setDB(MatchDB* db) { _db = db; }  // call before boot task; begin() also sets it
+    void connectWiFi();
+    void syncNTP();
+    void fetchAll();
+
     bool isWiFiConnected() const { return _wifiOk; }
     bool isTimeSync() const { return _timeSynced; }
+    bool isFirstFetchDone() const { return _firstFetchDone; }
 
 private:
     MatchDB* _db = nullptr;
     bool _wifiOk = false;
     bool _timeSynced = false;
+    bool _firstFetchDone = false;
     uint32_t _lastIdalgo = 0;
     uint32_t _lastLNR = 0;
     uint32_t _lastNTP = 0;
+    char _ccPhaseBase[128] = {};  // cached CC base URL, e.g. ".../champions-cup/1-4-de-finale"
 
-    void connectWiFi();
-    void syncNTP();
-    void fetchAll();
-
+    void fetchLive();
+    void loop();
     static void taskFunc(void* param);
+
+    // Fetch CC results+fixtures, trying each known phase until one has data
+    void fetchCC(WiFiClientSecure& client, IdalgoParser& idalgo, CompetitionData& d);
+    // If d.current_round > 0, fetch journee-(round+1)/calendrier to get full next round fixtures
+    void fetchNextJournee(CompetitionData& d, const char* compPath,
+                          IdalgoParser& idalgo, WiFiClientSecure& client);
 };
 
 extern DataFetcher Fetcher;

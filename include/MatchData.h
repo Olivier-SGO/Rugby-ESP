@@ -9,12 +9,12 @@ enum class MatchStatus : uint8_t {
 };
 
 struct MatchData {
-    char     home_name[40];
-    char     away_name[40];
-    char     home_abbrev[8];
-    char     away_abbrev[8];
-    char     home_slug[32];   // logo filename without .bin
-    char     away_slug[32];
+    char     home_name[24];   // longest club name: "Stade Aurillacois" (17)
+    char     away_name[24];
+    char     home_abbrev[6];  // abbreviations ≤ 5 chars
+    char     away_abbrev[6];
+    char     home_slug[18];   // longest slug: "bordeaux-begles" (15) + null
+    char     away_slug[18];
     int16_t  home_score;      // -1 = not played yet
     int16_t  away_score;
     MatchStatus status;
@@ -23,10 +23,24 @@ struct MatchData {
     uint8_t  round;           // journée number
 };
 
+// Lightweight copy stored in ScoreboardScene/FixturesScene — no team names needed
+struct MatchDisplay {
+    char        home_abbrev[6];
+    char        away_abbrev[6];
+    char        home_slug[18];
+    char        away_slug[18];
+    int16_t     home_score;
+    int16_t     away_score;
+    MatchStatus status;
+    int8_t      minute;
+    time_t      kickoff_utc;
+    uint8_t     round;
+};
+
 struct StandingEntry {
-    char    name[40];
-    char    abbrev[8];
-    char    slug[32];
+    char    name[24];     // longest name: "Stade Aurillacois" (17)
+    char    abbrev[6];    // abbreviations ≤ 5 chars
+    char    slug[18];     // longest slug: "bordeaux-begles" (15) + null
     uint8_t rank;
     int16_t points;
     uint8_t played;

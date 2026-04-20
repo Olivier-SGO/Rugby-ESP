@@ -1,4 +1,6 @@
 #include "SceneManager.h"
+#include "CompLogos.h"
+#include "DisplayPrefs.h"
 #include "config.h"
 #include <Arduino.h>
 
@@ -6,14 +8,14 @@ SceneManager Scenes;
 
 void SceneManager::begin(MatchDB* db) {
     _db = db;
+    loadCompLogos();
     rebuildSlots();
     activateCurrent();
 }
 
 void SceneManager::tick() {
-    if (_slots.empty()) { rebuildSlots(); return; }
+    if (_slotCount == 0) { rebuildSlots(); return; }
 
-    // Check for live matches
     if (_db->hasLive()) {
         _livePriority = true;
         _lastLiveDetect = millis();
@@ -21,26 +23,44 @@ void SceneManager::tick() {
         _livePriority = false;
     }
 
-    // Advance scene timer
     uint32_t dur = _slots[_current].durationMs;
     if (!_livePriority && millis() - _sceneStart > dur) {
         nextScene();
     }
 
-    // Rebuild slots every minute (data may have been updated)
     static uint32_t lastRebuild = 0;
     if (millis() - lastRebuild > 60000) {
         rebuildSlots();
         lastRebuild = millis();
     }
 
-    _slots[_current].scene->render();
+    Scene* s = _slots[_current].scene;
+
+    // Standings scenes are animated (scroll) — always render.
+    // All other scenes are static — render only when dirty.
+    bool animated = false;
+    for (int i = 0; i < MAX_STAND_SCENES; i++) {
+        if (s == &_standScenes[i]) { animated = true; break; }
+    }
+
+    if (_dirty || animated) {
+        s->render();
+        if (!animated) _dirty = false;
+    }
+}
+
+void SceneManager::markDirty() { _dirty = true; }
+
+void SceneManager::freeAllLogos() {
+    for (int i = 0; i < MAX_SCORE_SCENES; i++) _scoreScenes[i].freeLogos();
+    for (int i = 0; i < MAX_FIX_SCENES;   i++) _fixScenes[i].freeLogos();
 }
 
 void SceneManager::nextScene() {
-    _current = (_current + 1) % _slots.size();
+    _current = (_current + 1) % _slotCount;
     activateCurrent();
     _sceneStart = millis();
+    _dirty = true;
 }
 
 void SceneManager::setLivePriority(bool live) {
@@ -49,12 +69,16 @@ void SceneManager::setLivePriority(bool live) {
 }
 
 void SceneManager::activateCurrent() {
-    if (!_slots.empty()) _slots[_current].scene->onActivate();
+    if (_slotCount > 0) _slots[_current].scene->onActivate();
+    _dirty = true;
 }
 
 void SceneManager::rebuildSlots() {
-    _slots.clear();
+    _slotCount = 0;
     int scoreIdx = 0, fixIdx = 0, standIdx = 0;
+
+    DisplayPrefs prefs;
+    loadDisplayPrefs(prefs);
 
     struct CompInfo { const char* name; uint16_t color; uint8_t playoff; uint8_t relStart; };
     CompInfo comps[] = {
@@ -63,28 +87,39 @@ void SceneManager::rebuildSlots() {
         {"CHAMP CUP", C_PURPLE, 8, 99},
     };
 
+    auto addSlot = [&](Scene* s, uint32_t ms) {
+        if (_slotCount < MAX_SLOTS) _slots[_slotCount++] = {s, ms};
+    };
+
+    uint32_t scoreMs   = (uint32_t)prefs.score_s    * 1000;
+    uint32_t fixtureMs = (uint32_t)prefs.fixture_s  * 1000;
+    uint32_t standMs   = (uint32_t)prefs.standing_s * 1000;
+
     auto addComp = [&](const CompetitionData* d, int ci) {
         if (!d) return;
+        const CompPrefs& p = prefs.comp[ci];
+        if (!p.enabled) return;
 
-        // Results / live
-        for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
-            _scoreScenes[scoreIdx].setMatch(d->results[i], comps[ci].name, comps[ci].color,
-                                            i, d->result_count);
-            _slots.push_back({&_scoreScenes[scoreIdx], SCENE_SCORE_MS});
+        if (p.scores) {
+            for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
+                _scoreScenes[scoreIdx].setMatch(d->results[i], comps[ci].name, comps[ci].color,
+                                                i, d->result_count);
+                addSlot(&_scoreScenes[scoreIdx], scoreMs);
+            }
         }
 
-        // Fixtures
-        for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
-            _fixScenes[fixIdx].setMatch(d->fixtures[i], comps[ci].name, comps[ci].color,
-                                        i, d->fixture_count);
-            _slots.push_back({&_fixScenes[fixIdx], SCENE_FIXTURE_MS});
+        if (p.fixtures) {
+            for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
+                _fixScenes[fixIdx].setMatch(d->fixtures[i], comps[ci].name, comps[ci].color,
+                                            i, d->fixture_count);
+                addSlot(&_fixScenes[fixIdx], fixtureMs);
+            }
         }
 
-        // Standings
-        if (d->standing_count > 0 && standIdx < MAX_STAND_SCENES) {
-            _standScenes[standIdx].setData(*d, comps[ci].name, comps[ci].color,
-                                            comps[ci].playoff, comps[ci].relStart);
-            _slots.push_back({&_standScenes[standIdx], SCENE_STANDING_MS});
+        if (p.standings && d->standing_count > 0 && standIdx < MAX_STAND_SCENES) {
+            _standScenes[standIdx].setData(d->standings, d->standing_count, comps[ci].name,
+                                            comps[ci].color, comps[ci].playoff, comps[ci].relStart);
+            addSlot(&_standScenes[standIdx], standMs);
             standIdx++;
         }
     };
@@ -93,6 +128,7 @@ void SceneManager::rebuildSlots() {
     const CompetitionData* pd2 = _db->acquireProd2(); addComp(pd2, 1); _db->release();
     const CompetitionData* cc  = _db->acquireCC();    addComp(cc,  2); _db->release();
 
-    if (_slots.empty()) return;
-    if (_current >= _slots.size()) _current = 0;
+    if (_slotCount == 0) return;
+    if (_current >= _slotCount) _current = 0;
+    _dirty = true;
 }

@@ -4,23 +4,36 @@
 DisplayManager Display;
 
 bool DisplayManager::begin() {
+    if (_panel) end();
     HUB75_I2S_CFG cfg(PANEL_W, PANEL_H, CHAIN_LEN);
     cfg.gpio.r1  = HUB75_R1;  cfg.gpio.g1  = HUB75_G1;  cfg.gpio.b1  = HUB75_B1;
     cfg.gpio.r2  = HUB75_R2;  cfg.gpio.g2  = HUB75_G2;  cfg.gpio.b2  = HUB75_B2;
     cfg.gpio.a   = HUB75_A;   cfg.gpio.b   = HUB75_B;   cfg.gpio.c   = HUB75_C;
     cfg.gpio.d   = HUB75_D;   cfg.gpio.e   = HUB75_E;
     cfg.gpio.lat = HUB75_LAT; cfg.gpio.oe  = HUB75_OE;  cfg.gpio.clk = HUB75_CLK;
-    cfg.double_buff = true;
+    cfg.double_buff = false;
     cfg.clkphase = false;
 
     _panel = new MatrixPanel_I2S_DMA(cfg);
-    if (!_panel->begin()) return false;
-    _panel->setBrightness8(80);
+    if (!_panel->begin()) {
+        delete _panel;
+        _panel = nullptr;
+        return false;
+    }
+    _panel->setBrightness8(_brightness);
     _panel->clearScreen();
     return true;
 }
 
+bool DisplayManager::end() {
+    if (!_panel) return false;
+    delete _panel;
+    _panel = nullptr;
+    return true;
+}
+
 void DisplayManager::setBrightness(uint8_t b) {
+    _brightness = b;
     if (_panel) _panel->setBrightness8(b);
 }
 
@@ -70,4 +83,10 @@ void DisplayManager::drawBitmap565(int16_t x, int16_t y, int16_t w, int16_t h,
 
 void DisplayManager::flip() {
     if (_panel) _panel->flipDMABuffer();
+}
+
+void DisplayManager::drawTextShadow(int16_t x, int16_t y, const char* str,
+                                     uint16_t color, const GFXfont* font, uint8_t size) {
+    drawText(x + 1, y + 1, str, 0x2104, font, size);  // RGB(32,32,32) shadow
+    drawText(x,     y,     str, color,  font, size);
 }
