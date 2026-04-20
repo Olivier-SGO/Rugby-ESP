@@ -1,5 +1,6 @@
 #include "WebServer.h"
 #include "DisplayPrefs.h"
+#include "WiFiManager.h"
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
@@ -100,6 +101,43 @@ void WebUI::begin(MatchDB* db) {
         Scenes.rebuildSlots();
         Scenes.markDirty();
         req->send(200, "application/json", "{\"ok\":true}");
+    });
+
+    // GET /wifi  → list of configured networks
+    server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest* req) {
+        WiFiManager::loadNetworks();
+        JsonDocument doc;
+        auto arr = doc.to<JsonArray>();
+        for (int i = 0; i < WiFiManager::count; i++) {
+            auto o = arr.add<JsonObject>();
+            o["ssid"] = WiFiManager::nets[i].ssid;
+            // never send passwords back to client
+        }
+        String out; serializeJson(doc, out);
+        req->send(200, "application/json", out);
+    });
+
+    // POST /wifi  body: [{"ssid":"...","password":"..."}, ...]
+    server.on("/wifi", HTTP_POST, [](AsyncWebServerRequest* req) {}, nullptr,
+              [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+        JsonDocument doc;
+        if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
+            req->send(400, "application/json", "{\"error\":\"invalid json\"}");
+            return;
+        }
+        WiFiManager::count = 0;
+        for (JsonObjectConst o : doc.as<JsonArrayConst>()) {
+            if (WiFiManager::count >= WiFiManager::MAX_NETS) break;
+            const char* ssid = o["ssid"] | "";
+            const char* pass = o["password"] | "";
+            if (ssid[0]) {
+                strlcpy(WiFiManager::nets[WiFiManager::count].ssid,     ssid, sizeof(WiFiManager::nets[0].ssid));
+                strlcpy(WiFiManager::nets[WiFiManager::count].password, pass, sizeof(WiFiManager::nets[0].password));
+                WiFiManager::count++;
+            }
+        }
+        bool ok = WiFiManager::saveNetworks();
+        req->send(200, "application/json", ok ? "{\"ok\":true}" : "{\"error\":\"save failed\"}");
     });
 
     server.begin();

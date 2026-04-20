@@ -94,6 +94,12 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
   </div>
 </div>
 
+<h2>Reseaux WiFi</h2>
+<div id="wifi-indicator" style="font-size:12px;color:#4a4;text-align:right;height:16px;margin:4px 0"></div>
+<div id="wifi-list"></div>
+<button class="btn-primary" onclick="addWifiRow()" style="margin-top:8px">+ Ajouter un reseau</button>
+<button class="btn-primary" onclick="saveWifi()">Sauvegarder les reseaux</button>
+
 <h2>Controles</h2>
 <button class="btn-primary" onclick="nextScene()">Scene suivante</button>
 <button class="btn-danger"  onclick="doRestart()">Redemarrer</button>
@@ -195,8 +201,79 @@ async function doRestart() {
     await fetch('/restart', {method:'POST'});
 }
 
+// ---- WiFi networks editor ----
+let wifiNetworks = [];
+
+async function loadWifi() {
+  try {
+    const r = await fetch('/wifi');
+    wifiNetworks = await r.json();
+    renderWifiList();
+  } catch(e) { console.error('loadWifi', e); }
+}
+
+function renderWifiList() {
+  const container = document.getElementById('wifi-list');
+  container.innerHTML = '';
+  wifiNetworks.forEach((net, i) => {
+    const div = document.createElement('div');
+    div.className = 'row';
+    div.style = 'background:#1a1a1a;padding:8px;border-radius:6px;margin:4px 0';
+    div.innerHTML = `
+      <input type="text" placeholder="SSID" value="${escapeHtml(net.ssid)}" id="w-ssid-${i}"
+        style="flex:1;background:#222;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px">
+      <input type="password" placeholder="Mot de passe" value="" id="w-pass-${i}"
+        style="flex:1;background:#222;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px;margin-left:8px">
+      <button onclick="removeWifi(${i})" style="width:auto;padding:4px 10px;margin-left:8px;background:#c33;color:#fff;border:none;border-radius:4px;cursor:pointer">X</button>
+    `;
+    container.appendChild(div);
+  });
+}
+
+function addWifiRow() {
+  wifiNetworks.push({ssid:'',password:''});
+  renderWifiList();
+}
+
+function removeWifi(idx) {
+  wifiNetworks.splice(idx, 1);
+  renderWifiList();
+}
+
+async function saveWifi() {
+  const payload = [];
+  for (let i = 0; i < wifiNetworks.length; i++) {
+    const ssid = document.getElementById(`w-ssid-${i}`).value.trim();
+    const passEl = document.getElementById(`w-pass-${i}`);
+    let pass = passEl.value;
+    // If password field is empty, keep existing password (not sent back by server)
+    if (!pass && wifiNetworks[i].password) pass = wifiNetworks[i].password;
+    if (ssid) payload.push({ssid, password: pass});
+  }
+  try {
+    await fetch('/wifi', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const ind = document.getElementById('wifi-indicator');
+    ind.textContent = 'Reseaux sauvegardes';
+    setTimeout(() => ind.textContent = '', 2000);
+    loadWifi(); // refresh (passwords will be empty again)
+  } catch(e) {
+    document.getElementById('wifi-indicator').textContent = 'Erreur sauvegarde';
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 loadStatus();
 loadPrefs();
+loadWifi();
 setInterval(loadStatus, 15000);
 </script>
 </body>

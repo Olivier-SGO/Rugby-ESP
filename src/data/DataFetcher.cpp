@@ -3,9 +3,9 @@
 #include "WorldRugbyAPI.h"
 #include "DisplayManager.h"
 #include "SceneManager.h"
+#include "WiFiManager.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
-#include "credentials.h"
 #include "config.h"
 #include <Arduino.h>
 
@@ -37,16 +37,7 @@ void DataFetcher::taskFunc(void* param) {
 
 void DataFetcher::connectWiFi() {
     if (WiFi.status() == WL_CONNECTED) { _wifiOk = true; return; }
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.print("WiFi connecting");
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        Serial.print('.');
-    }
-    _wifiOk = (WiFi.status() == WL_CONNECTED);
-    Serial.println(_wifiOk ? " OK" : " FAILED");
+    _wifiOk = WiFiManager::connect();
 }
 
 void DataFetcher::syncNTP() {
