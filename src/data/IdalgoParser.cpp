@@ -164,8 +164,22 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
         if (sd < deferOffset) deferOffset = sd;
     }
 
-    // Infer current_round from "/journee-N/xxx" hrefs in nav links
-    // Accepts /resultats, /calendrier, or no suffix (just /journee-N)
+    // Detect current round from the "current day" nav indicator (most reliable).
+    // "Journée 21" inside span_idalgo_content_competition_navigation_days_listbox_current
+    {
+        char roundStr[24] = {};
+        if (readClassText(chunk, "span_idalgo_content_competition_navigation_days_listbox_current", roundStr, sizeof(roundStr))) {
+            const char* p = roundStr;
+            while (*p && !isdigit((unsigned char)*p)) p++;
+            int n = atoi(p);
+            if (n > 0) {
+                out.current_round = (uint8_t)n;
+                Serial.printf("Idalgo: detected round=%d from nav current\n", n);
+            }
+        }
+    }
+
+    // Fallback: infer from "/journee-N/xxx" hrefs in nav links
     // Also extracts round_url_base = id + round from /resultats/ID/journee-N links.
     int journeeLinks = 0;
     const char* jp = chunk;
@@ -174,10 +188,8 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
         const char* sl = strchr(jp + 9, '/');
         if (n > 0 && (!sl || strncmp(sl, "/resultats", 10) == 0 || strncmp(sl, "/calendrier", 11) == 0)) {
             journeeLinks++;
-            if (n > (int)out.current_round) {
-                out.current_round = (uint8_t)n;
-                Serial.printf("Idalgo: detected round=%d from link\n", n);
-            }
+            // Only use link rounds for round_url_base, NOT for current_round
+            // (links include past and future rounds, max is wrong)
             // Extract ID from /resultats/ID/journee-N pattern
             const char* rp = jp;
             while (rp > chunk && *(rp - 1) != '"') rp--; // rewind to start of href
@@ -193,19 +205,19 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
         }
         jp++;
     }
-    if (journeeLinks == 0) {
-        // Fallback: search without leading slash (relative URLs)
+    if (out.current_round == 0 && journeeLinks > 0) {
+        // Last resort: take max from links if nav current wasn't found
         jp = chunk;
-        while ((jp = strstr(jp, "journee-")) != nullptr && jp < end) {
-            if (jp == chunk || *(jp - 1) == '"' || *(jp - 1) == '=' || *(jp - 1) == '/') {
-                int n = atoi(jp + 8);
-                if (n > 0 && n > (int)out.current_round) {
-                    out.current_round = (uint8_t)n;
-                    Serial.printf("Idalgo: detected round=%d from rel link\n", n);
-                }
+        while ((jp = strstr(jp, "/journee-")) != nullptr && jp < end) {
+            int n = atoi(jp + 9);
+            const char* sl = strchr(jp + 9, '/');
+            if (n > 0 && (!sl || strncmp(sl, "/resultats", 10) == 0 || strncmp(sl, "/calendrier", 11) == 0)) {
+                if (n > (int)out.current_round) out.current_round = (uint8_t)n;
             }
             jp++;
         }
+        if (out.current_round > 0)
+            Serial.printf("Idalgo: detected round=%d from link fallback\n", out.current_round);
     }
 
     return deferOffset;

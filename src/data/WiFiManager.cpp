@@ -1,7 +1,7 @@
 #include "WiFiManager.h"
 #include "credentials.h"
-#include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <Arduino.h>
 
@@ -9,20 +9,27 @@ WiFiManager::Net WiFiManager::nets[MAX_NETS];
 int WiFiManager::count = 0;
 
 int WiFiManager::loadNetworks() {
-    File f = LittleFS.open("/wifi.json", "r");
-    if (!f) {
-        Serial.println("WiFiManager: /wifi.json not found");
+    Preferences prefs;
+    if (!prefs.begin("wifi", true)) {
+        Serial.println("WiFiManager: Preferences init failed");
         count = 0;
         return 0;
     }
+    String json = prefs.getString("nets", "");
+    prefs.end();
+
+    if (json.length() == 0) {
+        Serial.println("WiFiManager: no saved networks in Preferences");
+        count = 0;
+        return 0;
+    }
+
     JsonDocument doc;
-    if (deserializeJson(doc, f) != DeserializationError::Ok) {
-        Serial.println("WiFiManager: invalid /wifi.json");
-        f.close();
+    if (deserializeJson(doc, json) != DeserializationError::Ok) {
+        Serial.println("WiFiManager: invalid JSON in Preferences");
         count = 0;
         return 0;
     }
-    f.close();
 
     count = 0;
     for (JsonObjectConst o : doc.as<JsonArrayConst>()) {
@@ -31,7 +38,7 @@ int WiFiManager::loadNetworks() {
         strlcpy(nets[count].password, o["password"] | "", sizeof(nets[count].password));
         if (nets[count].ssid[0]) count++;
     }
-    Serial.printf("WiFiManager: loaded %d networks\n", count);
+    Serial.printf("WiFiManager: loaded %d networks from Preferences\n", count);
     return count;
 }
 
@@ -43,11 +50,14 @@ bool WiFiManager::saveNetworks() {
         o["ssid"]     = nets[i].ssid;
         o["password"] = nets[i].password;
     }
-    File f = LittleFS.open("/wifi.json", "w");
-    if (!f) return false;
-    serializeJson(doc, f);
-    f.close();
-    return true;
+    String json;
+    serializeJson(doc, json);
+
+    Preferences prefs;
+    if (!prefs.begin("wifi", false)) return false;
+    bool ok = prefs.putString("nets", json);
+    prefs.end();
+    return ok;
 }
 
 bool WiFiManager::waitForConnect(uint32_t timeoutMs) {
