@@ -67,7 +67,7 @@ void ScoreboardScene::drawScores() {
     // Scores at upper third (y=21), beside comp logo
     if (_md.home_score < 0) {
         Display.getTextBounds("vs", 0, 0, &x1, &y1, &tw, &th, sf);
-        Display.drawTextShadow(CENTER_MID - tw / 2, 21, "vs", C_WHITE, sf);
+        Display.drawTextRelief(CENTER_MID - tw / 2, 21, "vs", C_WHITE, sf);
     } else {
         char hs[8], as_[8];
         snprintf(hs,  sizeof(hs),  "%d", _md.home_score);
@@ -75,8 +75,8 @@ void ScoreboardScene::drawScores() {
         uint16_t hw, aw;
         Display.getTextBounds(hs,  0, 0, &x1, &y1, &hw, &th, sf);
         Display.getTextBounds(as_, 0, 0, &x1, &y1, &aw, &th, sf);
-        Display.drawTextShadow(lc - hw / 2, 21, hs, hColor, sf);
-        Display.drawTextShadow(rc - aw / 2, 21, as_, aColor, sf);
+        Display.drawTextRelief(lc - hw / 2, 21, hs, hColor, sf);
+        Display.drawTextRelief(rc - aw / 2, 21, as_, aColor, sf);
     }
 
     // Club names (regular 8pt) at 3/4 height (y=48)

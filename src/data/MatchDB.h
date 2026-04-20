@@ -11,8 +11,6 @@ public:
     void updateTop14(const CompetitionData& d);
     void updateProd2(const CompetitionData& d);
     void updateCC(const CompetitionData& d);
-    void updateStandingsTop14(const CompetitionData& d);
-    void updateStandingsProd2(const CompetitionData& d);
 
     // Thread-safe readers (called from Core 1) — caller must call release() after use
     const CompetitionData* acquireTop14();

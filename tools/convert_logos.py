@@ -157,15 +157,15 @@ def to_rgb565_aspect(url_or_path, target_h, max_w, out_path):
     except Exception as e:
         print(f"  ERR {os.path.basename(out_path)}: {e}")
 
-COMP_H    = 40
+COMP_H    = 32
 COMP_MAX_W = 48
-COMP_SM_H = 24
+COMP_SM_H = 18
 COMP_SM_MAX_W = 28
 
 COMP_LOGOS = [
     ("comp_top14", "https://assets.lnr.fr/1/1/1/8/0/7/conversions/logo-top14.e32e7e9a-logo.webp"),
     ("comp_prod2", "https://assets.lnr.fr/8/8/9/4/1/conversions/LOGO_PROD2-logo.webp"),
-    ("comp_cc",    "https://media-cdn.incrowdsports.com/77535d85-bcdc-49b9-9dc9-879e70d9adba.svg?format=webp&width=1920"),
+    ("comp_cc",    "https://medias.france.tv/DCSXZ4x0iXUFVqmzVimSFUrf5u0/1440x0/filters:quality(85):format(png)/d/b/z/phpym3zbd.png"),
 ]
 print("\nConverting competition logos (aspect-ratio preserving)...")
 for slug, url in COMP_LOGOS:

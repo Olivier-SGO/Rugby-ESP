@@ -1,6 +1,5 @@
 #include "DataFetcher.h"
 #include "IdalgoParser.h"
-#include "LNRParser.h"
 #include "WorldRugbyAPI.h"
 #include "DisplayManager.h"
 #include "SceneManager.h"
@@ -83,53 +82,42 @@ void DataFetcher::loop() {
     bool live = _db->hasLive();
     uint32_t pollMs = live ? POLL_LIVE_MS : POLL_NORMAL_MS;
     if (now - _lastIdalgo > pollMs || _lastIdalgo == 0) {
+        if (_rendererHandle) vTaskSuspend(_rendererHandle);
+        Scenes.freeAllLogos();  // reclaim logo heap before TLS alloc (~16KB per active scene)
         if (live)
             fetchLive();
         else
             fetchAll();
-
+        if (_rendererHandle) vTaskResume(_rendererHandle);
         Scenes.markDirty();
         _lastIdalgo = now;
     }
 }
 
 void DataFetcher::fetchAll() {
-    Scenes.freeAllLogos();  // reclaim logo heap before TLS alloc (~16KB per active scene)
     WiFiClientSecure client;
     client.setInsecure();
     client.setTimeout(20); // 20s socket timeout covers TLS handshake
 
     IdalgoParser idalgo;
-    LNRParser lnr;
-
     CompetitionData d;
 
     d.clear();
     idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats", d, client);
     idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/calendrier", d, client);
     fetchNextJournee(d, "top-14/phase-reguliere", idalgo, client);
-    if (d.result_count || d.fixture_count) _db->updateTop14(d);
-    Serial.printf("Top14: round=%d res=%d fix=%d\n", d.current_round, d.result_count, d.fixture_count);
+    if (d.result_count || d.fixture_count || d.standing_count) _db->updateTop14(d);
+    Serial.printf("Top14: round=%d res=%d fix=%d stand=%d\n", d.current_round, d.result_count, d.fixture_count, d.standing_count);
 
     d.clear();
     idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats", d, client);
     idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/calendrier", d, client);
     fetchNextJournee(d, "pro-d2/phase-reguliere", idalgo, client);
-    if (d.result_count || d.fixture_count) _db->updateProd2(d);
-    Serial.printf("ProD2: round=%d res=%d fix=%d\n", d.current_round, d.result_count, d.fixture_count);
+    if (d.result_count || d.fixture_count || d.standing_count) _db->updateProd2(d);
+    Serial.printf("ProD2: round=%d res=%d fix=%d stand=%d\n", d.current_round, d.result_count, d.fixture_count, d.standing_count);
 
     d.clear();
     fetchCC(client, idalgo, d);
-
-    if (millis() - _lastLNR > POLL_LNR_MS || _lastLNR == 0) {
-        d.clear();
-        if (lnr.fetch("https://top14.lnr.fr/classement", d, client))
-            _db->updateStandingsTop14(d);
-        d.clear();
-        if (lnr.fetch("https://prod2.lnr.fr/classement", d, client))
-            _db->updateStandingsProd2(d);
-        _lastLNR = millis();
-    }
 
     _firstFetchDone = true;
     Serial.printf("fetchAll done — heap: %u\n", ESP.getFreeHeap());
@@ -137,7 +125,6 @@ void DataFetcher::fetchAll() {
 }
 
 void DataFetcher::fetchLive() {
-    Scenes.freeAllLogos();
     WiFiClientSecure client;
     client.setInsecure();
     client.setTimeout(20);

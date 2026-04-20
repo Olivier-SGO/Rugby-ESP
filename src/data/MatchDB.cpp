@@ -25,29 +25,23 @@ void MatchDB::updateCC(const CompetitionData& d) {
     _cc = d;
     xSemaphoreGive(_mutex);
 }
-void MatchDB::updateStandingsTop14(const CompetitionData& d) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    for (int i = 0; i < d.standing_count && i < CompetitionData::MAX_STANDING; i++)
-        _top14.standings[i] = d.standings[i];
-    _top14.standing_count = d.standing_count;
-    xSemaphoreGive(_mutex);
-}
-void MatchDB::updateStandingsProd2(const CompetitionData& d) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    for (int i = 0; i < d.standing_count && i < CompetitionData::MAX_STANDING; i++)
-        _prod2.standings[i] = d.standings[i];
-    _prod2.standing_count = d.standing_count;
-    xSemaphoreGive(_mutex);
+
+static const CompetitionData* acquireWithTimeout(SemaphoreHandle_t mutex, const CompetitionData* d, const char* label) {
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(3000)) != pdTRUE) {
+        Serial.printf("MatchDB: %s mutex timeout — task deadlocked?\n", label);
+        return nullptr;
+    }
+    return d;
 }
 
 const CompetitionData* MatchDB::acquireTop14() {
-    xSemaphoreTake(_mutex, portMAX_DELAY); return &_top14;
+    return acquireWithTimeout(_mutex, &_top14, "Top14");
 }
 const CompetitionData* MatchDB::acquireProd2() {
-    xSemaphoreTake(_mutex, portMAX_DELAY); return &_prod2;
+    return acquireWithTimeout(_mutex, &_prod2, "ProD2");
 }
 const CompetitionData* MatchDB::acquireCC() {
-    xSemaphoreTake(_mutex, portMAX_DELAY); return &_cc;
+    return acquireWithTimeout(_mutex, &_cc, "CC");
 }
 void MatchDB::release() {
     xSemaphoreGive(_mutex);
@@ -95,13 +89,65 @@ static void deserializeMatch(JsonObjectConst obj, MatchData& m) {
     m.round       = obj["rnd"] | 0;
 }
 
+static void serializeStanding(JsonObject obj, const StandingEntry& s) {
+    obj["n"]  = s.name;
+    obj["a"]  = s.abbrev;
+    obj["sl"] = s.slug;
+    obj["r"]  = s.rank;
+    obj["p"]  = s.points;
+    obj["pl"] = s.played;
+    obj["d"]  = s.diff;
+}
+
+static void deserializeStanding(JsonObjectConst obj, StandingEntry& s) {
+    strlcpy(s.name,   obj["n"]  | "", sizeof(s.name));
+    strlcpy(s.abbrev, obj["a"]  | "", sizeof(s.abbrev));
+    strlcpy(s.slug,   obj["sl"] | "", sizeof(s.slug));
+    s.rank   = obj["r"]  | 0;
+    s.points = obj["p"]  | 0;
+    s.played = obj["pl"] | 0;
+    s.diff   = obj["d"]  | 0;
+}
+
+static void serializeCompetition(JsonObject obj, const CompetitionData& d) {
+    auto ra = obj["r"].to<JsonArray>();
+    for (int i = 0; i < d.result_count; i++) serializeMatch(ra.add<JsonObject>(), d.results[i]);
+    auto fa = obj["f"].to<JsonArray>();
+    for (int i = 0; i < d.fixture_count; i++) serializeMatch(fa.add<JsonObject>(), d.fixtures[i]);
+    auto sa = obj["s"].to<JsonArray>();
+    for (int i = 0; i < d.standing_count; i++) serializeStanding(sa.add<JsonObject>(), d.standings[i]);
+    obj["rnd"] = d.current_round;
+}
+
+static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
+    d.clear();
+    auto ra = obj["r"].as<JsonArrayConst>();
+    for (JsonObjectConst o : ra) {
+        if (d.result_count >= CompetitionData::MAX_MATCHES) break;
+        deserializeMatch(o, d.results[d.result_count++]);
+    }
+    auto fa = obj["f"].as<JsonArrayConst>();
+    for (JsonObjectConst o : fa) {
+        if (d.fixture_count >= CompetitionData::MAX_MATCHES) break;
+        deserializeMatch(o, d.fixtures[d.fixture_count++]);
+    }
+    auto sa = obj["s"].as<JsonArrayConst>();
+    for (JsonObjectConst o : sa) {
+        if (d.standing_count >= CompetitionData::MAX_STANDING) break;
+        deserializeStanding(o, d.standings[d.standing_count++]);
+    }
+    d.current_round = obj["rnd"] | 0;
+}
+
 void MatchDB::persist() {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
     JsonDocument doc;
-    auto arr = doc["t14_r"].to<JsonArray>();
-    for (int i = 0; i < _top14.result_count; i++)
-        serializeMatch(arr.add<JsonObject>(), _top14.results[i]);
+    serializeCompetition(doc["t14"].to<JsonObject>(), _top14);
+    serializeCompetition(doc["pd2"].to<JsonObject>(), _prod2);
+    serializeCompetition(doc["cc" ].to<JsonObject>(), _cc);
     File f = LittleFS.open("/cache.json", "w");
     if (f) { serializeJson(doc, f); f.close(); }
+    xSemaphoreGive(_mutex);
 }
 
 void MatchDB::load() {
@@ -109,12 +155,9 @@ void MatchDB::load() {
     if (!f) return;
     JsonDocument doc;
     if (deserializeJson(doc, f) == DeserializationError::Ok) {
-        auto arr = doc["t14_r"].as<JsonArrayConst>();
-        _top14.result_count = 0;
-        for (JsonObjectConst obj : arr) {
-            if (_top14.result_count >= CompetitionData::MAX_MATCHES) break;
-            deserializeMatch(obj, _top14.results[_top14.result_count++]);
-        }
+        deserializeCompetition(doc["t14"], _top14);
+        deserializeCompetition(doc["pd2"], _prod2);
+        deserializeCompetition(doc["cc"],  _cc);
     }
     f.close();
 }

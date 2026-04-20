@@ -26,5 +26,10 @@ private:
     static const int16_t ROW_H    = 16;
     static const float   SCROLL_SPEED;  // px per frame
 
+    // Sliding cache for mini logos: avoid opening LittleFS at 30fps
+    static const int LOGO_CACHE = 4;
+    uint16_t* _logoCache[LOGO_CACHE] = {};
+    int8_t    _cacheStandingIdx[LOGO_CACHE] = {-1, -1, -1, -1};
+
     uint16_t rankColor(uint8_t rank) const;
 };

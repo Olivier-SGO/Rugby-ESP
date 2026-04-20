@@ -29,7 +29,7 @@ void SceneManager::tick() {
     }
 
     static uint32_t lastRebuild = 0;
-    if (millis() - lastRebuild > 60000) {
+    if (millis() - lastRebuild > 300000) {  // 5 min — prefs rarely change
         rebuildSlots();
         lastRebuild = millis();
     }
@@ -124,9 +124,12 @@ void SceneManager::rebuildSlots() {
         }
     };
 
-    const CompetitionData* t14 = _db->acquireTop14(); addComp(t14, 0); _db->release();
-    const CompetitionData* pd2 = _db->acquireProd2(); addComp(pd2, 1); _db->release();
-    const CompetitionData* cc  = _db->acquireCC();    addComp(cc,  2); _db->release();
+    const CompetitionData* t14 = _db->acquireTop14();
+    if (t14) { addComp(t14, 0); _db->release(); }
+    const CompetitionData* pd2 = _db->acquireProd2();
+    if (pd2) { addComp(pd2, 1); _db->release(); }
+    const CompetitionData* cc  = _db->acquireCC();
+    if (cc)  { addComp(cc,  2); _db->release(); }
 
     if (_slotCount == 0) return;
     if (_current >= _slotCount) _current = 0;

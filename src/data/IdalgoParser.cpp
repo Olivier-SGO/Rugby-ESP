@@ -65,7 +65,6 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out, WiFiClientSecure
 
         size_t toRead = min((size_t)avail, space);
         size_t rd = stream->readBytes(_buf + overlapLen, toRead);
-        vTaskDelay(1);
         if (!rd) break;
 
         size_t total = overlapLen + rd;
@@ -87,13 +86,14 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out, WiFiClientSecure
 
     free(_buf); _buf = nullptr;
     // http destructor runs after this return, client is still alive (owned by caller)
-    Serial.printf("Idalgo: %u bytes, %d results, %d fixtures\n",
-                  totalRead, out.result_count, out.fixture_count);
+    Serial.printf("Idalgo: %u bytes, %d results, %d fixtures, %d standings, round=%d\n",
+                  totalRead, out.result_count, out.fixture_count, out.standing_count, out.current_round);
     return true;
 }
 
 size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
                                 CompetitionData& out, bool isLast) {
+    size_t deferOffset = len;
     const char* pos = chunk;
     const char* end = chunk + len;
 
@@ -114,8 +114,11 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
         }
 
         // Not enough data yet to cover MAX_BLOCK_SCAN — defer and wait for more
-        if (!isLast && !nextDiv && (size_t)(end - divStart) < MAX_BLOCK_SCAN)
-            return (size_t)(divStart - chunk);
+        if (!isLast && !nextDiv && (size_t)(end - divStart) < MAX_BLOCK_SCAN) {
+            size_t d = (size_t)(divStart - chunk);
+            if (d < deferOffset) deferOffset = d;
+            break;
+        }
 
         MatchData m = {};
         m.home_score = -1; m.away_score = -1; m.round = out.current_round;
@@ -155,17 +158,106 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
         pos = nextDiv ? blockEnd : (divStart + 1);
     }
 
-    // Infer current_round from "/journee-N/resultats" hrefs in nav links
-    // (only updates if data-round attrs were absent or lower)
+    // Parse standings (only on first fetch — standings don't change between resultats/calendrier)
+    if (out.standing_count == 0) {
+        size_t sd = parseStandings(chunk, len, out, isLast);
+        if (sd < deferOffset) deferOffset = sd;
+    }
+
+    // Infer current_round from "/journee-N/xxx" hrefs in nav links
+    // Accepts /resultats, /calendrier, or no suffix (just /journee-N)
+    int journeeLinks = 0;
     const char* jp = chunk;
     while ((jp = strstr(jp, "/journee-")) != nullptr && jp < end) {
         int n = atoi(jp + 9);
         const char* sl = strchr(jp + 9, '/');
-        if (n > 0 && sl && strncmp(sl, "/resultats", 10) == 0)
-            if (n > (int)out.current_round) out.current_round = (uint8_t)n;
+        if (n > 0 && (!sl || strncmp(sl, "/resultats", 10) == 0 || strncmp(sl, "/calendrier", 11) == 0)) {
+            journeeLinks++;
+            if (n > (int)out.current_round) {
+                out.current_round = (uint8_t)n;
+                Serial.printf("Idalgo: detected round=%d from link\n", n);
+            }
+        }
         jp++;
     }
+    if (journeeLinks == 0) {
+        // Fallback: search without leading slash (relative URLs)
+        jp = chunk;
+        while ((jp = strstr(jp, "journee-")) != nullptr && jp < end) {
+            if (jp == chunk || *(jp - 1) == '"' || *(jp - 1) == '=' || *(jp - 1) == '/') {
+                int n = atoi(jp + 8);
+                if (n > 0 && n > (int)out.current_round) {
+                    out.current_round = (uint8_t)n;
+                    Serial.printf("Idalgo: detected round=%d from rel link\n", n);
+                }
+            }
+            jp++;
+        }
+    }
 
+    return deferOffset;
+}
+
+size_t IdalgoParser::parseStandings(const char* chunk, size_t len,
+                                    CompetitionData& out, bool isLast) {
+    const char* spos = chunk;
+    const char* end = chunk + len;
+
+    while (spos < end && out.standing_count < CompetitionData::MAX_STANDING) {
+        const char* lineStart = strstr(spos, "div_idalgo_content_standing_line");
+        if (!lineStart || lineStart >= end) break;
+
+        const char* nextLine = strstr(lineStart + 30, "div_idalgo_content_standing_line");
+        const char* lineEnd = nextLine ? nextLine : end;
+
+        // If line is cut at chunk boundary and this isn't the last chunk, defer it
+        if (!isLast && !nextLine) {
+            return (size_t)(lineStart - chunk);
+        }
+
+        // Filter out header row: position cell must contain a number
+        char posStr[8] = {};
+        readClassText(lineStart, "span_idalgo_content_standing_position", posStr, sizeof(posStr));
+        int rank = atoi(posStr);
+        if (rank <= 0 || rank > CompetitionData::MAX_STANDING) {
+            spos = lineEnd;
+            continue;
+        }
+
+        StandingEntry entry = {};
+        entry.rank = (uint8_t)rank;
+
+        char name[64] = {};
+        const char* aPos = strstr(lineStart, "a_idalgo_content_standing_name");
+        if (aPos && aPos < lineEnd) {
+            readAttrVal(aPos, "title", name, sizeof(name));
+        }
+
+        if (name[0]) {
+            const TeamEntry* t = findTeam(name);
+            if (t) {
+                strlcpy(entry.name,   t->canonical, sizeof(entry.name));
+                strlcpy(entry.abbrev, t->abbrev,    sizeof(entry.abbrev));
+                strlcpy(entry.slug,   t->slug,      sizeof(entry.slug));
+            } else {
+                char stripped[64];
+                stripAccents(name, stripped, sizeof(stripped));
+                strlcpy(entry.name, stripped, sizeof(entry.name));
+            }
+        }
+
+        char pts[8] = {}, played[8] = {}, diffStr[8] = {};
+        readClassText(lineStart, "span_idalgo_content_standing_points", pts, sizeof(pts));
+        readClassText(lineStart, "span_idalgo_content_standing_played", played, sizeof(played));
+        readClassText(lineStart, "span_idalgo_content_standing_dif",    diffStr, sizeof(diffStr));
+
+        entry.points = atoi(pts);
+        entry.played = atoi(played);
+        entry.diff   = atoi(diffStr);
+
+        out.standings[out.standing_count++] = entry;
+        spos = lineEnd;
+    }
     return len;  // all processed
 }
 
@@ -175,11 +267,14 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
 
     // Round number: try data-round, data-journee, data-week in order
     char rndStr[4] = {};
-    if (!readAttrVal(start, "data-round",   rndStr, sizeof(rndStr)) &&
-        !readAttrVal(start, "data-journee", rndStr, sizeof(rndStr)))
-         readAttrVal(start, "data-week",    rndStr, sizeof(rndStr));
+    bool hasRound = readAttrVal(start, "data-round",   rndStr, sizeof(rndStr));
+    if (!hasRound) hasRound = readAttrVal(start, "data-journee", rndStr, sizeof(rndStr));
+    if (!hasRound) hasRound = readAttrVal(start, "data-week",    rndStr, sizeof(rndStr));
     int rn = atoi(rndStr);
-    if (rn > 0) match.round = (uint8_t)rn;
+    if (rn > 0) {
+        match.round = (uint8_t)rn;
+        Serial.printf("Idalgo: match %s vs %s has round attr=%d\n", match.home_name, match.away_name, rn);
+    }
 
     if (strcmp(status, "0") == 0)
         match.status = MatchStatus::Scheduled;

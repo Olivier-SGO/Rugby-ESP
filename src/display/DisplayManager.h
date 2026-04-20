@@ -25,6 +25,10 @@ public:
     void drawTextShadow(int16_t x, int16_t y, const char* str, uint16_t color,
                         const GFXfont* font = nullptr, uint8_t size = 1);
 
+    // Draw text with a 2px embossed relief (shadow + highlight for 3D pop)
+    void drawTextRelief(int16_t x, int16_t y, const char* str, uint16_t color,
+                        const GFXfont* font = nullptr, uint8_t size = 1);
+
     // Swap back→front buffer (call once per frame after all drawing)
     void flip();
 

@@ -122,12 +122,18 @@ void setup() {
     neoSet(0, 64, 0); // green = display OK
     hwTest();
 
+    Serial.println("setup: starting Scenes.begin()");
     // Scene manager + renderer on Core 1
     Scenes.begin(&DB);
+    Serial.println("setup: Scenes.begin() done");
+
     xTaskCreatePinnedToCore(renderTask, "Renderer", 8192, nullptr, 2, &rendererHandle, 1);
+    Serial.println("setup: renderer task created");
 
     // DataFetcher periodic polling task — reconnects WiFi, handles OTA/Web after first fetch
+    Fetcher.setRendererHandle(rendererHandle);
     Fetcher.begin(&DB); // resets _wifiOk → task reconnects WiFi
+    Serial.println("setup: DataFetcher started");
 
     esp_task_wdt_init(WDT_TIMEOUT_S, true);
     Serial.printf("Boot complete — heap: %u\n", ESP.getFreeHeap());

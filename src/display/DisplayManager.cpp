@@ -90,3 +90,12 @@ void DisplayManager::drawTextShadow(int16_t x, int16_t y, const char* str,
     drawText(x + 1, y + 1, str, 0x2104, font, size);  // RGB(32,32,32) shadow
     drawText(x,     y,     str, color,  font, size);
 }
+
+void DisplayManager::drawTextRelief(int16_t x, int16_t y, const char* str,
+                                     uint16_t color, const GFXfont* font, uint8_t size) {
+    // Embossed look: light highlight top-left, dark shadow bottom-right
+    // This is visible even on a black background.
+    drawText(x - 1, y - 1, str, 0x7BEF, font, size); // light grey highlight
+    drawText(x + 1, y + 1, str, 0x2104, font, size); // dark grey shadow
+    drawText(x,     y,     str, color,  font, size); // main text
+}

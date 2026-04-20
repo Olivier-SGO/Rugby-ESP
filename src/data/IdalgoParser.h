@@ -13,9 +13,10 @@ private:
 
     char* _buf = nullptr;
 
-    // Returns byte offset of deferred content (start of last incomplete match), or len if all done.
+    // Returns byte offset of deferred content (start of last incomplete match/standing), or len if all done.
     size_t parseChunk(const char* chunk, size_t len, CompetitionData& out, bool isLast);
     const char* parseMatchBlock(const char* start, const char* end, MatchData& match);
+    static size_t parseStandings(const char* chunk, size_t len, CompetitionData& out, bool isLast);
     static bool readAttrVal(const char* html, const char* attr, char* dst, size_t dstLen);
     static bool readClassText(const char* html, const char* cls, char* dst, size_t dstLen);
 };

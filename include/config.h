@@ -31,7 +31,6 @@
 #define SCENE_STANDING_MS   20000
 #define POLL_LIVE_MS        30000
 #define POLL_NORMAL_MS      600000    // 10 min
-#define POLL_LNR_MS         1800000   // 30 min
 #define NTP_INTERVAL_MS     3600000   // 1 hr
 #define LIVE_GRACE_MS       300000    // 5 min
 #define WDT_TIMEOUT_S       30
@@ -43,10 +42,10 @@
 #define LOGO_SM_H          16
 // Competition logos: fixed height, variable width (aspect-ratio-correct)
 // Width is derived at runtime from file size; these are buffer upper bounds.
-// Actual widths observed: top14=40, prod2=40, cc=34 (large); top14=24, cc=20 (small).
-#define LOGO_COMP_H        40
-#define LOGO_COMP_MAX_W    48   // buffer capacity in pixels (saves 37KB vs 160)
-#define LOGO_COMP_SM_H     24
+// Actual widths observed: top14=32, prod2=32, cc=27 (large); top14=19, cc=16 (small).
+#define LOGO_COMP_H        32
+#define LOGO_COMP_MAX_W    48   // buffer capacity in pixels
+#define LOGO_COMP_SM_H     18
 #define LOGO_COMP_SM_MAX_W 28
 
 // ── Scene layout ──────────────────────────────────────────────────────────────

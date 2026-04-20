@@ -11,6 +11,7 @@ public:
     void connectWiFi();
     void syncNTP();
     void fetchAll();
+    void setRendererHandle(TaskHandle_t h) { _rendererHandle = h; }
 
     bool isWiFiConnected() const { return _wifiOk; }
     bool isTimeSync() const { return _timeSynced; }
@@ -22,8 +23,8 @@ private:
     bool _timeSynced = false;
     bool _firstFetchDone = false;
     uint32_t _lastIdalgo = 0;
-    uint32_t _lastLNR = 0;
     uint32_t _lastNTP = 0;
+    TaskHandle_t _rendererHandle = nullptr;
     char _ccPhaseBase[128] = {};  // cached CC base URL, e.g. ".../champions-cup/1-4-de-finale"
 
     void fetchLive();
