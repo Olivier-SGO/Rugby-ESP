@@ -43,6 +43,14 @@ void ScoreboardScene::render() {
 void ScoreboardScene::drawLogos() {
     if (_homeLogo) Display.drawBitmap565(0, 0, LOGO_LG_W, LOGO_LG_H, _homeLogo);
     if (_awayLogo) Display.drawBitmap565(DISPLAY_W - LOGO_LG_W, 0, LOGO_LG_W, LOGO_LG_H, _awayLogo);
+
+    // Round indicator overlaid on home logo, bottom-left — very discrete
+    if (_md.round > 0) {
+        const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+        char rnd[8];
+        snprintf(rnd, sizeof(rnd), "J%d", _md.round);
+        Display.drawTextShadow(2, 63, rnd, C_GREY, af);
+    }
 }
 
 void ScoreboardScene::drawHeader() {
@@ -84,7 +92,10 @@ void ScoreboardScene::drawScores() {
     Display.getTextBounds(_md.away_abbrev, 0, 0, &x1, &y1, &tw, &th, af);
     Display.drawTextShadow(rc - tw / 2, 48, _md.away_abbrev, C_WHITE, af);
 
-    // Status (Final / MT / XX') at very bottom center
+    // Status at very bottom center:
+    //   - Finished → "Final" in grey
+    //   - Live     → "MT" or "45'" in green
+    //   - Scheduled → nothing
     char st[16] = {};
     uint16_t stColor = C_GREY;
     if (_md.status == MatchStatus::Finished) {
@@ -93,6 +104,7 @@ void ScoreboardScene::drawScores() {
         stColor = C_GREEN;
         if (_md.minute == -1)    strlcpy(st, "MT", sizeof(st));
         else if (_md.minute > 0) snprintf(st, sizeof(st), "%d'", _md.minute);
+        else                      strlcpy(st, "Live", sizeof(st)); // minute=0 fallback
     }
     if (st[0]) {
         Display.getTextBounds(st, 0, 0, &x1, &y1, &tw, &th, af);
@@ -103,13 +115,6 @@ void ScoreboardScene::drawScores() {
 void ScoreboardScene::drawFooter() {
     const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
     int16_t x1, y1; uint16_t tw, th;
-
-    // Round: bottom-left of center area
-    if (_md.round > 0) {
-        char rnd[8];
-        snprintf(rnd, sizeof(rnd), "J%d", _md.round);
-        Display.drawText(CENTER_X + 2, 63, rnd, C_GREY, af);
-    }
 
     // Counter: bottom-right corner, overlaid on away logo
     char counter[8];
