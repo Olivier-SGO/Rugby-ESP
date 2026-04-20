@@ -31,10 +31,9 @@ void StandingsScene::render() {
 
     const GFXfont* f8 = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
 
-    // Fixed header: competition logo + "CLASSEMENT"
-    int sw = gCompLogoSmW[_compIdx];
-    Display.drawBitmap565(2, 2, sw, LOGO_COMP_SM_H, gCompLogoSm[_compIdx]);
-    Display.drawText(sw + 6, HEADER_H - 2, "CLASSEMENT", _headerColor, f8);
+    // Fixed header: competition logo (large, 32px) on the right, ~20px from edge
+    int lw = gCompLogoLgW[_compIdx];
+    Display.drawBitmap565(DISPLAY_W - lw - 20, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
     Display.fillRect(0, HEADER_H, DISPLAY_W, 1, C_GREY);
 
     // Scrolling rows

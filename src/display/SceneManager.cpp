@@ -11,9 +11,14 @@ void SceneManager::begin(MatchDB* db) {
     loadCompLogos();
     rebuildSlots();
     activateCurrent();
+    _needsRebuild = false;
 }
 
 void SceneManager::tick() {
+    if (_needsRebuild) {
+        _needsRebuild = false;
+        rebuildSlots();
+    }
     if (_slotCount == 0) { rebuildSlots(); return; }
 
     if (_db->hasLive()) {

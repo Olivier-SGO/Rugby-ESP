@@ -24,14 +24,15 @@ public:
     // Free all loaded logo bitmaps to reclaim heap before network fetch
     void freeAllLogos();
 
-    // Rebuild scene list from DB + current prefs (call after prefs change)
-    void rebuildSlots();
+    // Request a rebuild on next tick (thread-safe — call from any core)
+    void requestRebuild() { _needsRebuild = true; }
 
 private:
     MatchDB* _db = nullptr;
     bool     _livePriority = false;
     uint32_t _lastLiveDetect = 0;
     bool     _dirty = true;
+    bool     _needsRebuild = true; // rebuild on first tick
 
     static constexpr size_t MAX_SLOTS = 48;
     SceneSlot _slots[MAX_SLOTS];
@@ -40,6 +41,7 @@ private:
     uint32_t  _sceneStart = 0;
 
     void activateCurrent();
+    void rebuildSlots();
 
     // Reusable scene objects (avoid heap churn)
     static const int MAX_SCORE_SCENES = 12;

@@ -98,7 +98,7 @@ void WebUI::begin(MatchDB* db) {
         if (doc["fixture_s"].is<int>())  p.fixture_s  = constrain((int)doc["fixture_s"],  3, 60);
         if (doc["standing_s"].is<int>()) p.standing_s = constrain((int)doc["standing_s"], 5, 120);
         saveDisplayPrefs(p);
-        Scenes.rebuildSlots();
+        Scenes.requestRebuild();
         Scenes.markDirty();
         req->send(200, "application/json", "{\"ok\":true}");
     });
