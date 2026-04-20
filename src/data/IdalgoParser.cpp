@@ -158,8 +158,8 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
         pos = nextDiv ? blockEnd : (divStart + 1);
     }
 
-    // Parse standings (only on first fetch — standings don't change between resultats/calendrier)
-    if (out.standing_count == 0) {
+    // Parse standings on every chunk (duplicates are filtered inside)
+    {
         size_t sd = parseStandings(chunk, len, out, isLast);
         if (sd < deferOffset) deferOffset = sd;
     }
@@ -228,9 +228,13 @@ size_t IdalgoParser::parseStandings(const char* chunk, size_t len,
         entry.rank = (uint8_t)rank;
 
         char name[64] = {};
-        const char* aPos = strstr(lineStart, "a_idalgo_content_standing_name");
-        if (aPos && aPos < lineEnd) {
-            readAttrVal(aPos, "title", name, sizeof(name));
+        // Try text between <a class="a_idalgo_content_standing_name">...</a>
+        if (!readClassText(lineStart, "a_idalgo_content_standing_name", name, sizeof(name))) {
+            // Fallback: title attribute (some mobile templates use it)
+            const char* aPos = strstr(lineStart, "a_idalgo_content_standing_name");
+            if (aPos && aPos < lineEnd) {
+                readAttrVal(aPos, "title", name, sizeof(name));
+            }
         }
 
         if (name[0]) {
@@ -255,15 +259,33 @@ size_t IdalgoParser::parseStandings(const char* chunk, size_t len,
         entry.played = atoi(played);
         entry.diff   = atoi(diffStr);
 
-        out.standings[out.standing_count++] = entry;
+        // Deduplicate by name (same table may appear multiple times in HTML)
+        bool dupe = false;
+        for (int i = 0; i < out.standing_count; i++) {
+            if (strcmp(out.standings[i].name, entry.name) == 0) { dupe = true; break; }
+        }
+        if (!dupe && entry.name[0] && out.standing_count < CompetitionData::MAX_STANDING) {
+            out.standings[out.standing_count++] = entry;
+        }
         spos = lineEnd;
     }
     return len;  // all processed
 }
 
 const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, MatchData& match) {
+    // Status: data-status may be absent on some matches (e.g. last fixture in list)
     char status[4] = {};
-    if (!readAttrVal(start, "data-status", status, sizeof(status))) return nullptr;
+    bool hasStatus = readAttrVal(start, "data-status", status, sizeof(status));
+    if (hasStatus) {
+        if (strcmp(status, "0") == 0)
+            match.status = MatchStatus::Scheduled;
+        else if (strcmp(status, "1") == 0 || strcmp(status, "3") == 0)
+            match.status = MatchStatus::Finished;
+        else
+            match.status = MatchStatus::Live;
+    } else {
+        match.status = MatchStatus::Scheduled; // default, overridden by score below
+    }
 
     // Round number: try data-round, data-journee, data-week in order
     char rndStr[4] = {};
@@ -275,13 +297,6 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
         match.round = (uint8_t)rn;
         Serial.printf("Idalgo: match %s vs %s has round attr=%d\n", match.home_name, match.away_name, rn);
     }
-
-    if (strcmp(status, "0") == 0)
-        match.status = MatchStatus::Scheduled;
-    else if (strcmp(status, "1") == 0 || strcmp(status, "3") == 0)
-        match.status = MatchStatus::Finished;
-    else
-        match.status = MatchStatus::Live;
 
     char raw[64] = {};
     if (readClassText(start, "localteam_txt", raw, sizeof(raw))) {
@@ -339,6 +354,9 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
             gt = strchr(p2, '>');
             if (gt) { match.away_score = atoi(gt + 1); }
         }
+        // If we found scores but had no data-status, infer Finished
+        if (!hasStatus && match.home_score >= 0 && match.away_score >= 0)
+            match.status = MatchStatus::Finished;
     }
 
     if (match.status == MatchStatus::Live) {
