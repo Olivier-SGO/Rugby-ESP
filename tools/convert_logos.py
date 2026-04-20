@@ -157,8 +157,8 @@ def to_rgb565_aspect(url_or_path, target_h, max_w, out_path):
     except Exception as e:
         print(f"  ERR {os.path.basename(out_path)}: {e}")
 
-COMP_H    = 32
-COMP_MAX_W = 48
+COMP_H    = 48
+COMP_MAX_W = 64
 COMP_SM_H = 18
 COMP_SM_MAX_W = 28
 

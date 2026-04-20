@@ -31,10 +31,8 @@ void StandingsScene::render() {
 
     const GFXfont* f8 = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
 
-    // Fixed header: competition logo (large, 32px) on the right, ~20px from edge
-    int lw = gCompLogoLgW[_compIdx];
-    Display.drawBitmap565(DISPLAY_W - lw - 20, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
-    Display.fillRect(0, HEADER_H, DISPLAY_W, 1, C_GREY);
+    // Competition logo (large) on the right, ~40px from edge — drawn after rows as overlay
+    // (see end of render())
 
     // Scrolling rows
     for (int i = 0; i < _standing_count; i++) {
@@ -66,13 +64,19 @@ void StandingsScene::render() {
         Display.drawText(DISPLAY_W - tw - 4, y + ROW_H - 4, pts, col, f8);
     }
 
+    // Draw competition logo overlay last so standings scroll behind it
+    {
+        int lw = gCompLogoLgW[_compIdx];
+        Display.drawBitmap565(DISPLAY_W - lw - 40, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+    }
+
     Display.flip();
 
     // Advance scroll
     _scrollY += SCROLL_SPEED;
-    int16_t maxScroll = _contentH - (DISPLAY_H - HEADER_H);
+    int16_t maxScroll = _contentH + HEADER_H + 1 - DISPLAY_H;
     if (maxScroll < 0) maxScroll = 0;
-    if (_scrollY > maxScroll + ROW_H) _scrollY = 0.0f; // loop back
+    if (_scrollY > maxScroll) _scrollY = 0.0f; // loop back
 }
 
 uint16_t StandingsScene::rankColor(uint8_t rank) const {

@@ -43,8 +43,8 @@
 // Competition logos: fixed height, variable width (aspect-ratio-correct)
 // Width is derived at runtime from file size; these are buffer upper bounds.
 // Actual widths observed: top14=32, prod2=32, cc=27 (large); top14=19, cc=16 (small).
-#define LOGO_COMP_H        32
-#define LOGO_COMP_MAX_W    48   // buffer capacity in pixels
+#define LOGO_COMP_H        48
+#define LOGO_COMP_MAX_W    64   // buffer capacity in pixels
 #define LOGO_COMP_SM_H     18
 #define LOGO_COMP_SM_MAX_W 28
 
