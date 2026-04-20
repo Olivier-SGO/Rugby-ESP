@@ -107,7 +107,7 @@ void setup() {
     neoSet(0, 64, 64); // cyan = fetching
     Fetcher.setDB(&DB);
     xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 16384, nullptr, 1, nullptr, 0);
-    { uint32_t t0 = millis(); while (!s_bootFetchDone && millis()-t0 < 90000) delay(100); }
+    { uint32_t t0 = millis(); while (!s_bootFetchDone && millis()-t0 < 120000) delay(100); }
     if (!s_bootFetchDone) Serial.println("Boot fetch timeout — continuing");
 
     // Turn WiFi off so Display.begin() can get 134KB of contiguous DMA-capable SRAM.

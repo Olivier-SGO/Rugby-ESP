@@ -168,20 +168,30 @@ void DataFetcher::fetchNextJournee(CompetitionData& d, const char* compPath,
     }
     char url[192];
 
-    // Fetch current round results explicitly — catches split-weekend journées
+    auto buildUrl = [&](uint8_t round) {
+        if (d.round_url_base > 0) {
+            uint32_t url_id = d.round_url_base - round;
+            snprintf(url, sizeof(url),
+                "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/resultats/%u/journee-%u",
+                compPath, (unsigned)url_id, (unsigned)round);
+        } else {
+            // Fallback to old format (may 404 on newer Idalgo layouts)
+            snprintf(url, sizeof(url),
+                "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/journee-%u/resultats",
+                compPath, (unsigned)round);
+        }
+    };
+
+    // Fetch current round explicitly — catches split-weekend journées
     uint8_t prevRes = d.result_count;
-    snprintf(url, sizeof(url),
-        "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/journee-%u/resultats",
-        compPath, (unsigned)d.current_round);
+    buildUrl(d.current_round);
     idalgo.fetch(url, d, client);
     if (d.result_count > prevRes)
-        Serial.printf("fetchNextJournee: +%d results from journee-%u/resultats\n",
+        Serial.printf("fetchNextJournee: +%d results from journee-%u\n",
                       d.result_count - prevRes, (unsigned)d.current_round);
 
-    // Fetch next round fixtures
-    snprintf(url, sizeof(url),
-        "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/journee-%u/calendrier",
-        compPath, (unsigned)(d.current_round + 1));
+    // Fetch next round
+    buildUrl(d.current_round + 1);
     uint8_t prevFix = d.fixture_count;
     idalgo.fetch(url, d, client);
     for (int i = prevFix; i < d.fixture_count; i++)

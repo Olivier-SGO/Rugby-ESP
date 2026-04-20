@@ -117,6 +117,7 @@ static void serializeCompetition(JsonObject obj, const CompetitionData& d) {
     auto sa = obj["s"].to<JsonArray>();
     for (int i = 0; i < d.standing_count; i++) serializeStanding(sa.add<JsonObject>(), d.standings[i]);
     obj["rnd"] = d.current_round;
+    obj["ub"] = d.round_url_base;
 }
 
 static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
@@ -137,6 +138,7 @@ static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
         deserializeStanding(o, d.standings[d.standing_count++]);
     }
     d.current_round = obj["rnd"] | 0;
+    d.round_url_base = obj["ub"] | 0;
 }
 
 void MatchDB::persist() {

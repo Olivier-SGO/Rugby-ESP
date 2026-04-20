@@ -166,6 +166,7 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
 
     // Infer current_round from "/journee-N/xxx" hrefs in nav links
     // Accepts /resultats, /calendrier, or no suffix (just /journee-N)
+    // Also extracts round_url_base = id + round from /resultats/ID/journee-N links.
     int journeeLinks = 0;
     const char* jp = chunk;
     while ((jp = strstr(jp, "/journee-")) != nullptr && jp < end) {
@@ -176,6 +177,18 @@ size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
             if (n > (int)out.current_round) {
                 out.current_round = (uint8_t)n;
                 Serial.printf("Idalgo: detected round=%d from link\n", n);
+            }
+            // Extract ID from /resultats/ID/journee-N pattern
+            const char* rp = jp;
+            while (rp > chunk && *(rp - 1) != '"') rp--; // rewind to start of href
+            const char* res = strstr(rp, "/resultats/");
+            if (res && res < jp) {
+                int id = atoi(res + 11);
+                if (id > 0 && n > 0) {
+                    uint32_t base = (uint32_t)(id + n);
+                    if (base > out.round_url_base) out.round_url_base = base;
+                    Serial.printf("Idalgo: round_url_base=%u (id=%d round=%d)\n", base, id, n);
+                }
             }
         }
         jp++;

@@ -58,10 +58,12 @@ struct CompetitionData {
     uint8_t      fixture_count;
     uint8_t      standing_count;
     uint8_t      current_round;
+    uint32_t     round_url_base; // base ID for journee URLs: id + round (e.g. 11608)
     time_t       last_updated;
 
     void clear() {
         result_count = fixture_count = standing_count = current_round = 0;
+        round_url_base = 0;
         last_updated = 0;
     }
 };
