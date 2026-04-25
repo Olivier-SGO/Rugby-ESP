@@ -32,6 +32,16 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
 <h1>Rugby Display</h1>
 <div id="status">Chargement...</div>
 
+<!-- AP configuration mode -->
+<div id="ap-config" style="display:none;background:#1a1a1a;border-radius:8px;padding:16px;margin:12px 0">
+  <h2 style="margin-top:0;color:#f84">Configuration WiFi</h2>
+  <p style="font-size:13px;color:#bbb">Le display n'est pas connecte a Internet.<br>Connectez-vous au reseau <b>RugbyDisplay-Setup</b> (mot de passe: <b>rugby2024</b>) puis cliquez ci-dessous.</p>
+  <button class="btn-primary" onclick="scanNetworks()">Scanner les reseaux</button>
+  <div id="scan-results" style="margin-top:12px"></div>
+  <button class="btn-primary" onclick="connectWifi()" id="btn-connect" style="display:none;margin-top:12px">Connecter et redemarrer</button>
+</div>
+
+<div id="main-ui">
 <h2>Luminosite</h2>
 <div class="row">
   <input type="range" id="bright" min="10" max="255" value="80" oninput="onBright(this.value)">
@@ -103,6 +113,7 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
 <h2>Controles</h2>
 <button class="btn-primary" onclick="nextScene()">Scene suivante</button>
 <button class="btn-danger"  onclick="doRestart()">Redemarrer</button>
+</div><!-- /main-ui -->
 
 <script>
 const COMPS = ['top14','prod2','cc'];
@@ -111,10 +122,83 @@ async function loadStatus() {
   try {
     const r = await fetch('/status');
     const d = await r.json();
-    document.getElementById('status').textContent =
-      `WiFi: ${d.wifi}  IP: ${d.ip}\nHeap: ${d.heap} octets  Uptime: ${d.uptime}s`;
+    const apMode = d.ap_mode === true;
+    document.getElementById('ap-config').style.display = apMode ? 'block' : 'none';
+    document.getElementById('main-ui').style.display    = apMode ? 'none'  : 'block';
+    if (apMode) {
+      document.getElementById('status').textContent =
+        `Mode configuration AP  IP: ${d.ap_ip || '192.168.4.1'}`;
+    } else {
+      document.getElementById('status').textContent =
+        `WiFi: ${d.wifi}  IP: ${d.ip}\nHeap: ${d.heap} octets  Uptime: ${d.uptime}s`;
+    }
   } catch(e) {
     document.getElementById('status').textContent = 'Erreur: ' + e;
+  }
+}
+
+let scannedNetworks = [];
+
+async function scanNetworks() {
+  const btn = document.querySelector('#ap-config button');
+  btn.textContent = 'Scan en cours...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/scan');
+    scannedNetworks = await r.json();
+    const container = document.getElementById('scan-results');
+    container.innerHTML = '';
+    if (scannedNetworks.length === 0) {
+      container.innerHTML = '<p style="color:#888;font-size:13px">Aucun reseau trouve.</p>';
+    } else {
+      scannedNetworks.forEach((net, i) => {
+        const div = document.createElement('div');
+        div.style = 'background:#222;padding:8px;border-radius:6px;margin:6px 0;display:flex;align-items:center;gap:8px';
+        div.innerHTML = `
+          <input type="radio" name="ap-ssid" value="${escapeHtml(net.ssid)}" id="ap-net-${i}">
+          <label for="ap-net-${i}" style="flex:1;font-size:14px;color:#eee;cursor:pointer">
+            ${escapeHtml(net.ssid)} <span style="color:#888;font-size:12px">${net.rssi} dBm ${net.open ? '(ouvert)' : ''}</span>
+          </label>
+        `;
+        container.appendChild(div);
+      });
+      // Add password field
+      const passDiv = document.createElement('div');
+      passDiv.style = 'margin-top:8px';
+      passDiv.innerHTML = `
+        <input type="password" id="ap-password" placeholder="Mot de passe WiFi"
+          style="width:100%;background:#222;border:1px solid #444;color:#eee;border-radius:4px;padding:8px;font-size:14px">
+      `;
+      container.appendChild(passDiv);
+      document.getElementById('btn-connect').style.display = 'block';
+    }
+  } catch(e) {
+    document.getElementById('scan-results').innerHTML = '<p style="color:#c33;font-size:13px">Erreur de scan</p>';
+  }
+  btn.textContent = 'Scanner les reseaux';
+  btn.disabled = false;
+}
+
+async function connectWifi() {
+  const selected = document.querySelector('input[name="ap-ssid"]:checked');
+  if (!selected) { alert('Selectionnez un reseau WiFi'); return; }
+  const ssid = selected.value;
+  const pass = document.getElementById('ap-password').value;
+  const btn = document.getElementById('btn-connect');
+  btn.textContent = 'Connexion...';
+  btn.disabled = true;
+  try {
+    await fetch('/wifi', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify([{ssid, password: pass}])
+    });
+    await fetch('/restart', {method:'POST'});
+    document.getElementById('scan-results').innerHTML = '<p style="color:#4a4">Redemarrage en cours...</p>';
+  } catch(e) {
+    alert('Erreur: ' + e);
+    btn.textContent = 'Connecter et redemarrer';
+    btn.disabled = false;
   }
 }
 

@@ -10,12 +10,14 @@
 #include <ESPmDNS.h>
 #include <Adafruit_NeoPixel.h>
 #include <WiFi.h>
+#include <DNSServer.h>
 
 #include "config.h"
 #include "DisplayManager.h"
 #include "SceneManager.h"
 #include "MatchDB.h"
 #include "DataFetcher.h"
+#include "WiFiManager.h"
 #include "WebUI.h"
 #include "LogoCache.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
@@ -88,7 +90,7 @@ static void showBootInfo() {
 
 // ── Renderer task (Core 1) ────────────────────────────────────────────────────
 static void renderTask(void*) {
-    const TickType_t frameDelay = pdMS_TO_TICKS(33); // ~30fps
+    const TickType_t frameDelay = pdMS_TO_TICKS(16); // ~60fps
     for (;;) {
         Scenes.tick();
         vTaskDelay(frameDelay);
@@ -204,20 +206,40 @@ void loop() {
     }
 
     static bool servicesStarted = false;
-    if (!servicesStarted && bootFetchHandled && WiFi.status() == WL_CONNECTED) {
-        if (ESP.getFreeHeap() < 50000) {
-            Serial.printf("Low heap (%u) — delaying web services\n", ESP.getFreeHeap());
-        } else {
+    if (!servicesStarted && bootFetchHandled && ESP.getFreeHeap() >= 50000) {
+        Web.begin(&DB);
+        servicesStarted = true;
+        Serial.printf("Web server started — heap: %u\n", ESP.getFreeHeap());
+    }
+
+    static bool apStarted = false;
+    static bool mdnsStarted = false;
+    static DNSServer dnsServer;
+    if (bootFetchHandled && servicesStarted) {
+        if (!apStarted && WiFi.status() != WL_CONNECTED) {
+            WiFiManager::startAP();
+            dnsServer.start(53, "*", WiFi.softAPIP());
+            Serial.println("DNS captive portal started");
+            apStarted = true;
+            Scenes.markDirty();
+        }
+        if (apStarted) {
+            dnsServer.processNextRequest();
+        }
+        if (apStarted && WiFi.status() == WL_CONNECTED) {
+            WiFiManager::stopAP();
+            apStarted = false;
+            Scenes.markDirty();
+        }
+        if (!mdnsStarted && WiFi.status() == WL_CONNECTED) {
             ArduinoOTA.setHostname("rugby-display");
             ArduinoOTA.begin();
             MDNS.begin("rugby-display");
             MDNS.addService("http", "tcp", 80);
-            Web.begin(&DB);
             String ip = WiFi.localIP().toString();
-            Serial.printf("OTA + Web started — heap: %u\n", ESP.getFreeHeap());
-            Serial.printf(">>> Web UI: http://rugby-display.local  (IP: %s)\n", ip.c_str());
+            Serial.printf("OTA + mDNS started — IP: %s\n", ip.c_str());
+            mdnsStarted = true;
             Scenes.markDirty();
-            servicesStarted = true;
         }
     }
     delay(10);

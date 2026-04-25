@@ -128,3 +128,28 @@ bool WiFiManager::connect() {
     Serial.println("WiFiManager: no known network reachable");
     return false;
 }
+
+bool WiFiManager::startAP() {
+    WiFi.mode(WIFI_AP);
+    delay(200);
+    // Channel 6, max 4 clients, WPA2 password
+    bool ok = WiFi.softAP("RugbyDisplay-Setup", "rugby2024", 6, 0, 4);
+    if (ok) {
+        Serial.printf("AP started: %s, IP: %s, password: rugby2024\n",
+                      WiFi.softAPSSID().c_str(),
+                      WiFi.softAPIP().toString().c_str());
+    } else {
+        Serial.println("AP start failed");
+    }
+    return ok;
+}
+
+void WiFiManager::stopAP() {
+    WiFi.softAPdisconnect(true);
+    delay(100);
+    Serial.println("AP stopped");
+}
+
+bool WiFiManager::isAPMode() {
+    return WiFi.getMode() & WIFI_AP;
+}

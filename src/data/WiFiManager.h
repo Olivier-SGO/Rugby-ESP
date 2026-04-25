@@ -14,6 +14,11 @@ public:
     // Save current internal cache to /wifi.json.
     static bool saveNetworks();
 
+    // Access Point mode for WiFi configuration
+    static bool startAP();
+    static void stopAP();
+    static bool isAPMode();
+
     // In-memory network table (max 8 networks)
     struct Net {
         char ssid[32];

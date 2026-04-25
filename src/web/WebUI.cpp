@@ -27,10 +27,29 @@ void WebUI::begin(MatchDB* db) {
     // GET /status
     server.on("/status", HTTP_GET, []() {
         JsonDocument doc;
-        doc["wifi"]   = WiFi.SSID();
-        doc["ip"]     = WiFi.localIP().toString();
-        doc["heap"]   = ESP.getFreeHeap();
-        doc["uptime"] = millis() / 1000;
+        doc["wifi"]    = WiFi.SSID();
+        doc["ip"]      = WiFi.localIP().toString();
+        doc["heap"]    = ESP.getFreeHeap();
+        doc["uptime"]  = millis() / 1000;
+        doc["ap_mode"] = (WiFi.getMode() & WIFI_AP) != 0;
+        if (WiFi.getMode() & WIFI_AP) {
+            doc["ap_ip"] = WiFi.softAPIP().toString();
+        }
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    // GET /scan → list available WiFi networks
+    server.on("/scan", HTTP_GET, []() {
+        int n = WiFi.scanNetworks();
+        JsonDocument doc;
+        auto arr = doc.to<JsonArray>();
+        for (int i = 0; i < n; i++) {
+            auto o = arr.add<JsonObject>();
+            o["ssid"] = WiFi.SSID(i);
+            o["rssi"] = WiFi.RSSI(i);
+            o["open"] = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+        }
         String out; serializeJson(doc, out);
         server.send(200, "application/json", out);
     });

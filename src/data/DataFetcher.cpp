@@ -23,6 +23,10 @@ void DataFetcher::taskFunc(void* param) {
 }
 
 void DataFetcher::connectWiFi() {
+    if (WiFi.getMode() & WIFI_AP) {
+        _wifiOk = false;
+        return; // don't kill AP config mode
+    }
     if (WiFi.status() == WL_CONNECTED) {
         _wifiOk = true;
         return;
@@ -76,6 +80,10 @@ void DataFetcher::syncNTP() {
 
 void DataFetcher::loop() {
     uint32_t now = millis();
+    if (WiFi.getMode() & WIFI_AP) {
+        // AP config mode: don't try to connect to external WiFi (would kill the AP)
+        return;
+    }
     if (WiFi.status() != WL_CONNECTED) {
         _wifiOk = false;
         connectWiFi();
