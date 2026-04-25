@@ -1,7 +1,11 @@
+// Rugby ESP32 Display — Firmware v1.0.0-functional (2026-04-24)
+// See config.h for validated feature list
+
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
+#include <esp_heap_caps.h>
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <Adafruit_NeoPixel.h>
@@ -12,8 +16,10 @@
 #include "SceneManager.h"
 #include "MatchDB.h"
 #include "DataFetcher.h"
-#include "WebServer.h"
+#include "WebUI.h"
 #include "LogoCache.h"
+#include "fonts/AtkinsonHyperlegible8pt7b.h"
+#include "fonts/AtkinsonHyperlegibleBold12pt7b.h"
 
 // MatrixPortal S3 onboard NeoPixel
 #define NEO_PIN   4
@@ -37,16 +43,48 @@ static void hwTest() {
         Serial.printf("HW TEST: %s\n", s.label);
         Display.fillScreen(s.color);
         Display.flip();
-        delay(1000);
+        delay(500);
     }
     Display.fillScreen(C_BLACK);
     Display.drawText(4, 20, "HUB75 OK  256x64", 0xFFFF, nullptr);
     Display.drawText(4, 36, "R  G  B  W  OK",   0x07E0, nullptr);
     Display.flip();
-    delay(2000);
+    delay(1000);
 }
 
 static TaskHandle_t rendererHandle = nullptr;
+
+// ── Boot info screen (IP + mDNS) ─────────────────────────────────────────────
+static void showBootInfo() {
+    if (!rendererHandle) return;
+    vTaskSuspend(rendererHandle);
+
+    String ip = WiFi.localIP().toString();
+    const char* host = "rugby-display.local";
+
+    Display.fillScreen(C_BLACK);
+    const GFXfont* f8  = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+    const GFXfont* f12 = (const GFXfont*)&AtkinsonHyperlegibleBold12pt7b;
+
+    int16_t x1, y1; uint16_t tw, th;
+
+    Display.getTextBounds("Rugby Display", 0, 0, &x1, &y1, &tw, &th, f12);
+    Display.drawTextRelief(CENTER_MID - tw/2, 14, "Rugby Display", C_WHITE, f12);
+
+    Display.getTextBounds(host, 0, 0, &x1, &y1, &tw, &th, f8);
+    Display.drawText(CENTER_MID - tw/2, 34, host, C_GOLD, f8);
+
+    char ipBuf[40];
+    snprintf(ipBuf, sizeof(ipBuf), "IP: %s", ip.c_str());
+    Display.getTextBounds(ipBuf, 0, 0, &x1, &y1, &tw, &th, f8);
+    Display.drawText(CENTER_MID - tw/2, 50, ipBuf, C_GOLD, f8);
+
+    Display.flip();
+    delay(5000);
+
+    vTaskResume(rendererHandle);
+    Scenes.markDirty();
+}
 
 // ── Renderer task (Core 1) ────────────────────────────────────────────────────
 static void renderTask(void*) {
@@ -61,10 +99,13 @@ static void renderTask(void*) {
 // ── Boot fetch task (Core 0, 16KB stack — avoids setup() stack overflow) ─────
 static volatile bool s_bootFetchDone = false;
 static void bootFetchTask(void*) {
+    vTaskDelay(pdMS_TO_TICKS(2000)); // laisser le WiFi s'initialiser
+    if (rendererHandle) vTaskSuspend(rendererHandle); // stop render allocs during fetch
     Fetcher.connectWiFi();
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
     Fetcher.fetchAll();
     s_bootFetchDone = true;
+    if (rendererHandle) vTaskResume(rendererHandle);
     vTaskDelete(nullptr);
 }
 
@@ -75,6 +116,7 @@ void setup() {
     while (!Serial && millis() - t0 < 3000) delay(10);
     delay(200);
     Serial.println("\n=== Rugby ESP32 Display ===");
+    Serial.printf("FW version: %s\n", FIRMWARE_VERSION);
 
     neo.begin();
     neoSet(0, 0, 64); // blue = booting
@@ -91,9 +133,9 @@ void setup() {
     }
 
     if (psramFound()) {
-        Serial.printf("PSRAM: %u MB total, %u MB free\n",
-                      ESP.getPsramSize() / (1024*1024),
-                      ESP.getFreePsram() / (1024*1024));
+        Serial.printf("PSRAM: %u KB total, %u KB free\n",
+                      ESP.getPsramSize() / 1024,
+                      ESP.getFreePsram() / 1024);
     } else {
         Serial.println("PSRAM: NOT detected");
     }
@@ -101,17 +143,8 @@ void setup() {
     DB.begin();
     DB.load();
 
-    // Boot fetch in a dedicated 16KB task so SSL/HTTP don't overflow setup()'s stack.
-    // Must happen before Display.begin() so SSL has 230KB+ of free heap.
-    // Set _db before the task starts so fetchAll() can call DB.updateTop14() etc.
-    neoSet(0, 64, 64); // cyan = fetching
-    Fetcher.setDB(&DB);
-    xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 16384, nullptr, 1, nullptr, 0);
-    { uint32_t t0 = millis(); while (!s_bootFetchDone && millis()-t0 < 120000) delay(100); }
-    if (!s_bootFetchDone) Serial.println("Boot fetch timeout — continuing");
-
-    // Turn WiFi off so Display.begin() can get 134KB of contiguous DMA-capable SRAM.
-    // The DataFetcher periodic task will reconnect WiFi when it starts.
+    // Turn WiFi off to free contiguous SRAM for Display.begin().
+    // With logos in PSRAM we still have plenty of heap left for SSL later.
     WiFi.mode(WIFI_OFF);
     delay(200);
     Serial.printf("heap before Display.begin: %u free, %u max-block\n",
@@ -131,37 +164,61 @@ void setup() {
     neoSet(0, 64, 0); // green = display OK
     hwTest();
 
+    // Redirect large allocations (>4KB) to PSRAM, leaving SRAM for DMA/TLS small buffers
+    if (psramFound()) {
+        heap_caps_malloc_extmem_enable(4096);
+        Serial.println("PSRAM: large-alloc redirect enabled (>4KB)");
+    }
+
+    // Start showing cached data immediately while fetch runs in background
     Serial.println("setup: starting Scenes.begin()");
-    // Scene manager + renderer on Core 1
     Scenes.begin(&DB);
     Serial.println("setup: Scenes.begin() done");
 
-    xTaskCreatePinnedToCore(renderTask, "Renderer", 8192, nullptr, 2, &rendererHandle, 1);
+    xTaskCreatePinnedToCore(renderTask, "Renderer", 4096, nullptr, 2, &rendererHandle, 1);
     Serial.println("setup: renderer task created");
 
-    // DataFetcher periodic polling task — reconnects WiFi, handles OTA/Web after first fetch
+    // Boot fetch in background — renderer stays alive so user sees old data
+    neoSet(0, 64, 64); // cyan = fetching
+    Fetcher.setDB(&DB);
     Fetcher.setRendererHandle(rendererHandle);
-    Fetcher.begin(&DB); // resets _wifiOk → task reconnects WiFi
-    Serial.println("setup: DataFetcher started");
+    xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 20480, nullptr, 1, nullptr, 0);
 
     esp_task_wdt_init(WDT_TIMEOUT_S, true);
-    Serial.printf("Boot complete — heap: %u\n", ESP.getFreeHeap());
+    Serial.printf("Boot setup done — heap: %u\n", ESP.getFreeHeap());
 }
 
 void loop() {
     ArduinoOTA.handle();
-    static bool servicesStarted = false;
-    if (!servicesStarted && Fetcher.isWiFiConnected()) {
-        ArduinoOTA.setHostname("rugby-display");
-        ArduinoOTA.begin();
-        MDNS.begin("rugby-display");
-        MDNS.addService("http", "tcp", 80);
-        Web.begin(&DB);
-        String ip = WiFi.localIP().toString();
-        Serial.printf("OTA + Web started — heap: %u\n", ESP.getFreeHeap());
-        Serial.printf(">>> Web UI: http://rugby-display.local  (IP: %s)\n", ip.c_str());
+    Web.handle();
+
+    // When boot fetch finishes, rebuild scenes, show IP info, then start services
+    static bool bootFetchHandled = false;
+    if (!bootFetchHandled && s_bootFetchDone) {
+        bootFetchHandled = true;
         Scenes.markDirty();
-        servicesStarted = true;
+        Scenes.requestRebuild();
+        showBootInfo();
+        Fetcher.begin(&DB);
+        Serial.println("setup: DataFetcher started");
+    }
+
+    static bool servicesStarted = false;
+    if (!servicesStarted && bootFetchHandled && WiFi.status() == WL_CONNECTED) {
+        if (ESP.getFreeHeap() < 50000) {
+            Serial.printf("Low heap (%u) — delaying web services\n", ESP.getFreeHeap());
+        } else {
+            ArduinoOTA.setHostname("rugby-display");
+            ArduinoOTA.begin();
+            MDNS.begin("rugby-display");
+            MDNS.addService("http", "tcp", 80);
+            Web.begin(&DB);
+            String ip = WiFi.localIP().toString();
+            Serial.printf("OTA + Web started — heap: %u\n", ESP.getFreeHeap());
+            Serial.printf(">>> Web UI: http://rugby-display.local  (IP: %s)\n", ip.c_str());
+            Scenes.markDirty();
+            servicesStarted = true;
+        }
     }
     delay(10);
 }

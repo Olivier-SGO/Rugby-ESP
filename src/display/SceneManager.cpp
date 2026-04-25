@@ -54,7 +54,7 @@ void SceneManager::tick() {
     }
 }
 
-void SceneManager::markDirty() { _dirty = true; }
+void SceneManager::markDirty() { _dirty = true; _needsRebuild = true; }
 
 void SceneManager::freeAllLogos() {
     // No-op: all logos are pre-loaded into PSRAM at boot.
@@ -106,24 +106,65 @@ void SceneManager::rebuildSlots() {
         if (!p.enabled) return;
 
         if (p.scores) {
-            for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
-                _scoreScenes[scoreIdx].setMatch(d->results[i], comps[ci].name, comps[ci].color,
-                                                i, d->result_count);
-                addSlot(&_scoreScenes[scoreIdx], scoreMs);
+            // For Champions Cup, sort results by group so same pool plays consecutively
+            if (ci == 2 && d->result_count > 1) {
+                MatchData sorted[CompetitionData::MAX_MATCHES];
+                memcpy(sorted, d->results, sizeof(MatchData) * d->result_count);
+                for (int i = 0; i < d->result_count - 1; i++) {
+                    for (int j = 0; j < d->result_count - i - 1; j++) {
+                        if (strcmp(sorted[j].group, sorted[j+1].group) > 0) {
+                            MatchData tmp = sorted[j];
+                            sorted[j] = sorted[j+1];
+                            sorted[j+1] = tmp;
+                        }
+                    }
+                }
+                for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
+                    _scoreScenes[scoreIdx].setMatch(sorted[i], comps[ci].name, comps[ci].color,
+                                                    i, d->result_count);
+                    addSlot(&_scoreScenes[scoreIdx], scoreMs);
+                }
+            } else {
+                for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
+                    _scoreScenes[scoreIdx].setMatch(d->results[i], comps[ci].name, comps[ci].color,
+                                                    i, d->result_count);
+                    addSlot(&_scoreScenes[scoreIdx], scoreMs);
+                }
             }
         }
 
         if (p.fixtures) {
-            for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
-                _fixScenes[fixIdx].setMatch(d->fixtures[i], comps[ci].name, comps[ci].color,
-                                            i, d->fixture_count);
-                addSlot(&_fixScenes[fixIdx], fixtureMs);
+            // Sort CC fixtures by group too
+            if (ci == 2 && d->fixture_count > 1) {
+                MatchData sorted[CompetitionData::MAX_MATCHES];
+                memcpy(sorted, d->fixtures, sizeof(MatchData) * d->fixture_count);
+                for (int i = 0; i < d->fixture_count - 1; i++) {
+                    for (int j = 0; j < d->fixture_count - i - 1; j++) {
+                        if (strcmp(sorted[j].group, sorted[j+1].group) > 0) {
+                            MatchData tmp = sorted[j];
+                            sorted[j] = sorted[j+1];
+                            sorted[j+1] = tmp;
+                        }
+                    }
+                }
+                for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
+                    _fixScenes[fixIdx].setMatch(sorted[i], comps[ci].name, comps[ci].color,
+                                                i, d->fixture_count);
+                    addSlot(&_fixScenes[fixIdx], fixtureMs);
+                }
+            } else {
+                for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
+                    _fixScenes[fixIdx].setMatch(d->fixtures[i], comps[ci].name, comps[ci].color,
+                                                i, d->fixture_count);
+                    addSlot(&_fixScenes[fixIdx], fixtureMs);
+                }
             }
         }
 
         if (p.standings && d->standing_count > 0 && standIdx < MAX_STAND_SCENES) {
             _standScenes[standIdx].setData(d->standings, d->standing_count, comps[ci].name,
-                                            comps[ci].color, comps[ci].playoff, comps[ci].relStart);
+                                            comps[ci].color, comps[ci].playoff, comps[ci].relStart,
+                                            standMs);
             addSlot(&_standScenes[standIdx], standMs);
             standIdx++;
         }

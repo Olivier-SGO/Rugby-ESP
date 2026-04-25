@@ -1,36 +1,44 @@
-#include "WebServer.h"
+#include "WebUI.h"
 #include "DisplayPrefs.h"
 #include "WiFiManager.h"
-#include <ESPAsyncWebServer.h>
+#include "MatchRecord.h"
+#include <WebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <Arduino.h>
 
-static AsyncWebServer server(80);
+static WebServer server(80);
 WebUI Web;
 
 void WebUI::begin(MatchDB* db) {
-    // Serve static files from LittleFS
-    server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+    // Serve static index.html
+    server.on("/", HTTP_GET, []() {
+        File f = LittleFS.open("/index.html", "r");
+        if (!f) {
+            server.send(404, "text/plain", "Not found");
+            return;
+        }
+        server.streamFile(f, "text/html");
+        f.close();
+    });
 
     // GET /status
-    server.on("/status", HTTP_GET, [db](AsyncWebServerRequest* req) {
+    server.on("/status", HTTP_GET, []() {
         JsonDocument doc;
         doc["wifi"]   = WiFi.SSID();
         doc["ip"]     = WiFi.localIP().toString();
         doc["heap"]   = ESP.getFreeHeap();
         doc["uptime"] = millis() / 1000;
         String out; serializeJson(doc, out);
-        req->send(200, "application/json", out);
+        server.send(200, "application/json", out);
     });
 
     // POST /config  body: {"brightness":80}
-    server.on("/config", HTTP_POST, [](AsyncWebServerRequest* req) {}, nullptr,
-              [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+    server.on("/config", HTTP_POST, []() {
         JsonDocument doc;
-        if (deserializeJson(doc, data, len) == DeserializationError::Ok) {
+        if (deserializeJson(doc, server.arg("plain")) == DeserializationError::Ok) {
             Preferences prefs;
             prefs.begin("rugby", false);
             if (doc["brightness"].is<int>()) {
@@ -40,24 +48,24 @@ void WebUI::begin(MatchDB* db) {
             }
             prefs.end();
         }
-        req->send(200, "application/json", "{\"ok\":true}");
+        server.send(200, "application/json", "{\"ok\":true}");
     });
 
     // POST /restart
-    server.on("/restart", HTTP_POST, [](AsyncWebServerRequest* req) {
-        req->send(200, "text/plain", "Restarting...");
+    server.on("/restart", HTTP_POST, []() {
+        server.send(200, "text/plain", "Restarting...");
         delay(500);
         ESP.restart();
     });
 
     // GET /next-scene
-    server.on("/next-scene", HTTP_GET, [](AsyncWebServerRequest* req) {
+    server.on("/next-scene", HTTP_GET, []() {
         Scenes.nextScene();
-        req->send(200, "text/plain", "OK");
+        server.send(200, "text/plain", "OK");
     });
 
     // GET /prefs
-    server.on("/prefs", HTTP_GET, [](AsyncWebServerRequest* req) {
+    server.on("/prefs", HTTP_GET, []() {
         DisplayPrefs p;
         loadDisplayPrefs(p);
         JsonDocument doc;
@@ -72,19 +80,18 @@ void WebUI::begin(MatchDB* db) {
         doc["fixture_s"]  = p.fixture_s;
         doc["standing_s"] = p.standing_s;
         String out; serializeJson(doc, out);
-        req->send(200, "application/json", out);
+        server.send(200, "application/json", out);
     });
 
     // POST /prefs  body: {"top14":{"enabled":true,"scores":true,...}, "score_s":8, ...}
-    server.on("/prefs", HTTP_POST, [](AsyncWebServerRequest* req) {}, nullptr,
-              [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+    server.on("/prefs", HTTP_POST, []() {
         JsonDocument doc;
-        if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
-            req->send(400, "application/json", "{\"error\":\"invalid json\"}");
+        if (deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok) {
+            server.send(400, "application/json", "{\"error\":\"invalid json\"}");
             return;
         }
         DisplayPrefs p;
-        loadDisplayPrefs(p); // start from current values
+        loadDisplayPrefs(p);
         const char* keys[3] = {"top14", "prod2", "cc"};
         for (int i = 0; i < 3; i++) {
             if (!doc[keys[i]].isNull()) {
@@ -100,29 +107,27 @@ void WebUI::begin(MatchDB* db) {
         saveDisplayPrefs(p);
         Scenes.requestRebuild();
         Scenes.markDirty();
-        req->send(200, "application/json", "{\"ok\":true}");
+        server.send(200, "application/json", "{\"ok\":true}");
     });
 
     // GET /wifi  → list of configured networks
-    server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest* req) {
+    server.on("/wifi", HTTP_GET, []() {
         WiFiManager::loadNetworks();
         JsonDocument doc;
         auto arr = doc.to<JsonArray>();
         for (int i = 0; i < WiFiManager::count; i++) {
             auto o = arr.add<JsonObject>();
             o["ssid"] = WiFiManager::nets[i].ssid;
-            // never send passwords back to client
         }
         String out; serializeJson(doc, out);
-        req->send(200, "application/json", out);
+        server.send(200, "application/json", out);
     });
 
     // POST /wifi  body: [{"ssid":"...","password":"..."}, ...]
-    server.on("/wifi", HTTP_POST, [](AsyncWebServerRequest* req) {}, nullptr,
-              [](AsyncWebServerRequest* req, uint8_t* data, size_t len, size_t, size_t) {
+    server.on("/wifi", HTTP_POST, []() {
         JsonDocument doc;
-        if (deserializeJson(doc, data, len) != DeserializationError::Ok) {
-            req->send(400, "application/json", "{\"error\":\"invalid json\"}");
+        if (deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok) {
+            server.send(400, "application/json", "{\"error\":\"invalid json\"}");
             return;
         }
         WiFiManager::count = 0;
@@ -137,9 +142,70 @@ void WebUI::begin(MatchDB* db) {
             }
         }
         bool ok = WiFiManager::saveNetworks();
-        req->send(200, "application/json", ok ? "{\"ok\":true}" : "{\"error\":\"save failed\"}");
+        server.send(200, "application/json", ok ? "{\"ok\":true}" : "{\"error\":\"save failed\"}");
+    });
+
+    // GET /dump/cc — export compact binary CC data as JSON
+    server.on("/dump/cc", HTTP_GET, []() {
+        File f = LittleFS.open("/cc_data.bin", "r");
+        if (!f) {
+            server.send(404, "application/json", "{\"error\":\"no cc_data.bin\"}");
+            return;
+        }
+        uint32_t magic = 0;
+        f.read((uint8_t*)&magic, 4);
+        if (magic != 0x52474343) {
+            f.close();
+            server.send(500, "application/json", "{\"error\":\"bad magic\"}");
+            return;
+        }
+        uint8_t version = f.read();
+        uint8_t result_count = f.read();
+        uint8_t fixture_count = f.read();
+        uint8_t current_round = f.read();
+
+        JsonDocument doc;
+        doc["version"] = version;
+        doc["current_round"] = current_round;
+        auto results = doc["results"].to<JsonArray>();
+        auto fixtures = doc["fixtures"].to<JsonArray>();
+
+        for (int i = 0; i < result_count; i++) {
+            CCMatchRecord rec;
+            if (!MatchRecord::readRecord(f, rec)) break;
+            auto o = results.add<JsonObject>();
+            o["home"] = rec.homeSlug;
+            o["away"] = rec.awaySlug;
+            o["homeScore"] = rec.homeScore;
+            o["awayScore"] = rec.awayScore;
+            o["status"] = rec.status;
+            o["round"] = rec.round;
+            o["group"] = rec.group;
+            o["kickoff"] = (long)rec.kickoffEpoch;
+        }
+        for (int i = 0; i < fixture_count; i++) {
+            CCMatchRecord rec;
+            if (!MatchRecord::readRecord(f, rec)) break;
+            auto o = fixtures.add<JsonObject>();
+            o["home"] = rec.homeSlug;
+            o["away"] = rec.awaySlug;
+            o["homeScore"] = rec.homeScore;
+            o["awayScore"] = rec.awayScore;
+            o["status"] = rec.status;
+            o["round"] = rec.round;
+            o["group"] = rec.group;
+            o["kickoff"] = (long)rec.kickoffEpoch;
+        }
+        f.close();
+        String out;
+        serializeJson(doc, out);
+        server.send(200, "application/json", out);
     });
 
     server.begin();
     Serial.printf("Web UI at http://%s\n", WiFi.localIP().toString().c_str());
+}
+
+void WebUI::handle() {
+    server.handleClient();
 }

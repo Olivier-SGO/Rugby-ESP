@@ -10,7 +10,8 @@ int WiFiManager::count = 0;
 
 int WiFiManager::loadNetworks() {
     Preferences prefs;
-    if (!prefs.begin("wifi", true)) {
+    // Open RW first to auto-create namespace if missing, then read
+    if (!prefs.begin("wifi", false)) {
         Serial.println("WiFiManager: Preferences init failed");
         count = 0;
         return 0;
@@ -76,6 +77,7 @@ bool WiFiManager::connect() {
     if (count == 0) {
         Serial.println("WiFiManager: no saved networks, using compile-time credentials");
         WiFi.mode(WIFI_STA);
+        delay(200);  // let WiFi driver init before begin()
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
         bool ok = waitForConnect(30000);
         Serial.println(ok ? "WiFi: connected (fallback)" : "WiFi: fallback failed");
@@ -112,6 +114,7 @@ bool WiFiManager::connect() {
             if (strcmp(scannedSsid, nets[j].ssid) == 0) {
                 Serial.printf("WiFi: trying %s (%d dBm)\n", nets[j].ssid, rssi);
                 WiFi.mode(WIFI_STA);
+                delay(200);
                 WiFi.begin(nets[j].ssid, nets[j].password);
                 if (waitForConnect(20000)) {
                     Serial.printf("WiFi: connected to %s\n", nets[j].ssid);

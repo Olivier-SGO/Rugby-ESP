@@ -7,11 +7,9 @@
 #include <Arduino.h>
 #include <math.h>
 
-const float StandingsScene::SCROLL_SPEED = 0.5f; // px per frame → ~15px/sec at 30fps
-
 void StandingsScene::setData(const StandingEntry* standings, uint8_t count, const char* comp,
                               uint16_t headerColor, uint8_t playoffCutoff,
-                              uint8_t relegationStart) {
+                              uint8_t relegationStart, uint32_t durationMs) {
     _standing_count = count;
     for (int i = 0; i < count; i++) _standings[i] = standings[i];
     strlcpy(_comp, comp, sizeof(_comp));
@@ -20,10 +18,12 @@ void StandingsScene::setData(const StandingEntry* standings, uint8_t count, cons
     _relegationStart = relegationStart;
     _contentH = count * ROW_H;
     _compIdx = compIndex(comp);
+    _durationMs = durationMs;
 }
 
 void StandingsScene::onActivate() {
     _scrollY = 0.0f;
+    _sceneStartMs = millis();
 }
 
 void StandingsScene::render() {
@@ -36,8 +36,8 @@ void StandingsScene::render() {
 
     // Scrolling rows
     for (int i = 0; i < _standing_count; i++) {
-        int16_t y = HEADER_H + 1 + (int16_t)(i * ROW_H - _scrollY);
-        if (y + ROW_H < HEADER_H) continue;
+        int16_t y = (int16_t)(i * ROW_H - _scrollY);
+        if (y + ROW_H < 0) continue;
         if (y > DISPLAY_H) break;
 
         const StandingEntry& e = _standings[i];
@@ -72,11 +72,24 @@ void StandingsScene::render() {
 
     Display.flip();
 
-    // Advance scroll
-    _scrollY += SCROLL_SPEED;
-    int16_t maxScroll = _contentH + HEADER_H + 1 - DISPLAY_H;
+    // Time-based scroll: 1s pause at start, 0.5s pause at end
+    uint32_t elapsed = millis() - _sceneStartMs;
+    int16_t maxScroll = _contentH - DISPLAY_H;
     if (maxScroll < 0) maxScroll = 0;
-    if (_scrollY > maxScroll) _scrollY = 0.0f; // loop back
+
+    if (elapsed < 1000) {
+        _scrollY = 0.0f;
+    } else if (elapsed >= _durationMs - 500) {
+        _scrollY = (float)maxScroll;
+    } else {
+        uint32_t scrollTime = _durationMs - 1500; // total scroll duration in ms
+        uint32_t scrollElapsed = elapsed - 1000;
+        _scrollY = (float)maxScroll * (float)scrollElapsed / (float)scrollTime;
+    }
+
+    if (elapsed >= _durationMs) {
+        _sceneStartMs = millis(); // loop
+    }
 }
 
 uint16_t StandingsScene::rankColor(uint8_t rank) const {

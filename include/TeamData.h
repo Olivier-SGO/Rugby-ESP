@@ -47,7 +47,7 @@ static const TeamEntry TEAM_TABLE[] = {
   {"Dax",                 "US Dax",                       "Dax",                    "Dax",               "USD",  "dax"},
   {"Colomiers",           "US Colomiers",                 "Colomiers",              "Colomiers",         "USC",  "colomiers"},
   // Champions Cup (non-French clubs)
-  {"Leinster",            "Leinster Rugby",               "",                       "Leinster",          "LEI",  "leinster"},
+  {"Leinster",            "Leinster Rugby",               "",                       "Leinster",          "LEN",  "leinster"},
   {"Munster",             "Munster Rugby",                "",                       "Munster",           "MUN",  "munster"},
   {"Ulster",              "Ulster Rugby",                 "",                       "Ulster",            "ULS",  "ulster"},
   {"Connacht",            "Connacht Rugby",               "",                       "Connacht",          "CON",  "connacht"},
@@ -65,6 +65,10 @@ static const TeamEntry TEAM_TABLE[] = {
   {"Bulls",               "Vodacom Bulls",                "",                       "Bulls",             "BUL",  "bulls"},
   {"Lions",               "Emirates Lions",               "",                       "Lions",             "LIO",  "lions"},
   {"Sharks",              "Cell C Sharks",                "",                       "Sharks",            "SHA",  "sharks"},
+  {"Saracens",            "Saracens",                     "",                       "Saracens",          "SAR",  "saracens"},
+  {"The Sharks",          "Cell C Sharks",                "",                       "Sharks",            "SHA",  "sharks"},
+  {"Edimbourg",           "Edinburgh Rugby",              "",                       "Edinburgh",         "EDI",  "edinburgh"},
+  {"Leicester",           "Leicester Tigers",             "",                       "Leicester",         "LEI",  "leicester"},
   {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr}  // sentinel
 };
 
@@ -122,6 +126,15 @@ inline const TeamEntry* findTeam(const char* name) {
             stripAccents(TEAM_TABLE[i].lnr, sl, sizeof(sl));
             if (strcasecmp(stripped, sl) == 0) return &TEAM_TABLE[i];
         }
+    }
+    return nullptr;
+}
+
+// Find team entry by logo slug (e.g. "toulouse", "leinster").
+inline const TeamEntry* findTeamBySlug(const char* slug) {
+    if (!slug || !slug[0]) return nullptr;
+    for (int i = 0; TEAM_TABLE[i].idalgo; i++) {
+        if (strcasecmp(slug, TEAM_TABLE[i].slug) == 0) return &TEAM_TABLE[i];
     }
     return nullptr;
 }

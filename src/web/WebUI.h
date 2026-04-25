@@ -6,6 +6,7 @@
 class WebUI {
 public:
     void begin(MatchDB* db);
+    void handle();
 };
 
 extern WebUI Web;

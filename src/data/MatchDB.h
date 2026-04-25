@@ -23,6 +23,10 @@ public:
     void persist();
     void load();
 
+    // Compact binary persistence for Champions Cup (demonstrates low-resource storage)
+    void persistCCBinary(const CompetitionData& d);
+    bool loadCCBinary(CompetitionData& d);
+
 private:
     CompetitionData _top14, _prod2, _cc;
     SemaphoreHandle_t _mutex = nullptr;

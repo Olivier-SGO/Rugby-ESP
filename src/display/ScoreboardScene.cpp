@@ -20,6 +20,7 @@ void ScoreboardScene::setMatch(const MatchData& m, const char* comp,
     _md.minute      = m.minute;
     _md.kickoff_utc = m.kickoff_utc;
     _md.round       = m.round;
+    strlcpy(_md.group, m.group, sizeof(_md.group));
     strlcpy(_comp, comp, sizeof(_comp));
     _headerColor = headerColor;
     _index = index; _total = total;
@@ -44,9 +45,11 @@ void ScoreboardScene::drawLogos() {
     if (_homeLogo) Display.drawBitmap565(0, 0, LOGO_LG_W, LOGO_LG_H, _homeLogo);
     if (_awayLogo) Display.drawBitmap565(DISPLAY_W - LOGO_LG_W, 0, LOGO_LG_W, LOGO_LG_H, _awayLogo);
 
-    // Round indicator overlaid on home logo, bottom-left — very discrete, 1px plain text
-    if (_md.round > 0) {
-        const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+    // Round / group indicator overlaid on home logo, bottom-left — very discrete, 1px plain text
+    const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+    if (_md.group[0]) {
+        Display.drawText(2, 63, _md.group, C_GREY, af);
+    } else if (_md.round > 0) {
         char rnd[8];
         snprintf(rnd, sizeof(rnd), "J%d", _md.round);
         Display.drawText(2, 63, rnd, C_GREY, af);

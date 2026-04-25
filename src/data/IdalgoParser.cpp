@@ -1,371 +1,311 @@
 #include "IdalgoParser.h"
 #include "TeamData.h"
+#include <WiFiClientSecure.h>
 #include <Arduino.h>
+#include <time.h>
 
-bool IdalgoParser::fetch(const char* url, CompetitionData& out, WiFiClientSecure& client) {
-    // Note: caller is responsible for out.clear() before the first fetch.
-    // This allows accumulating results + fixtures from two URLs into the same struct.
-
-    {
-        const char* hostStart = strstr(url, "://");
-        if (hostStart) {
-            hostStart += 3;
-            const char* hostEnd = strchr(hostStart, '/');
-            char host[64] = {};
-            if (hostEnd) strlcpy(host, hostStart, min((size_t)(hostEnd - hostStart + 1), sizeof(host)));
-            IPAddress ip;
-            bool dnsOk = WiFi.hostByName(host, ip);
-            Serial.printf("Idalgo DNS %s → %s\n", host, dnsOk ? ip.toString().c_str() : "FAILED");
+// Replace common HTML entities in-place (e.g. &ccedil; -> ç, &egrave; -> è)
+static void decodeHtmlEntities(char* s) {
+    if (!s || !s[0]) return;
+    static const struct { const char* ent; const char* repl; } MAP[] = {
+        {"ccedil;","ç"},{"egrave;","è"},{"eacute;","é"},{"agrave;","à"},
+        {"ecirc;","ê"},{"icirc;","î"},{"ocirc;","ô"},{"ucirc;","û"},
+        {"uuml;","ü"},{"auml;","ä"},{"euml;","ë"},{"iuml;","ï"},{"ouml;","ö"},
+        {"Ccedil;","Ç"},{"Eacute;","É"},{"Egrave;","È"},{"Agrave;","À"},
+        {"Ecirc;","Ê"},{"Icirc;","Î"},{"Ocirc;","Ô"},{"Ucirc;","Û"},
+        {"Auml;","Ä"},{"Euml;","Ë"},{"Iuml;","Ï"},{"Ouml;","Ö"},{"Uuml;","Ü"},
+        {"apos;","'"},{"amp;","&"},{"quot;","\""},{"lt;","<"},{"gt;",">"},
+        {nullptr, nullptr}
+    };
+    size_t i = 0, j = 0;
+    while (s[i]) {
+        if (s[i] == '&') {
+            // Numeric entity &#NNN;
+            if (s[i+1] == '#') {
+                int val = 0;
+                size_t k = i + 2;
+                while (s[k] >= '0' && s[k] <= '9') {
+                    val = val * 10 + (s[k] - '0');
+                    k++;
+                }
+                if (s[k] == ';' && val > 0) {
+                    if (val < 128) {
+                        s[j++] = (char)val;
+                    } else if (val < 0x800) {
+                        s[j++] = (char)(0xC0 | (val >> 6));
+                        s[j++] = (char)(0x80 | (val & 0x3F));
+                    } else {
+                        s[j++] = (char)(0xE0 | (val >> 12));
+                        s[j++] = (char)(0x80 | ((val >> 6) & 0x3F));
+                        s[j++] = (char)(0x80 | (val & 0x3F));
+                    }
+                    i = k + 1;
+                    continue;
+                }
+            }
+            bool replaced = false;
+            for (int m = 0; MAP[m].ent; m++) {
+                size_t elen = strlen(MAP[m].ent);
+                if (strncmp(s + i + 1, MAP[m].ent, elen) == 0) {
+                    size_t rlen = strlen(MAP[m].repl);
+                    for (size_t r = 0; r < rlen; r++) s[j++] = MAP[m].repl[r];
+                    i += elen + 1; // skip &ent; (elen already includes ;)
+                    replaced = true;
+                    break;
+                }
+            }
+            if (replaced) continue;
         }
+        s[j++] = s[i++];
     }
+    s[j] = '\0';
+}
 
+// Read entire HTTP stream into a dynamically-growing buffer (PSRAM for >4KB).
+static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outLen) {
+    size_t cap = 65536;
+    char* buf = (char*)malloc(cap);
+    if (!buf) return nullptr;
+    size_t len = 0;
+    while (http.connected() || stream->available()) {
+        if (!stream->available()) { delay(5); continue; }
+        int avail = stream->available();
+        if (len + avail + 1 > cap) {
+            while (cap < len + avail + 1) cap *= 2;
+            char* nb = (char*)realloc(buf, cap);
+            if (!nb) { free(buf); return nullptr; }
+            buf = nb;
+        }
+        int rd = stream->readBytes(buf + len, avail);
+        len += rd;
+        if (len > 600000) break; // safety
+    }
+    buf[len] = '\0';
+    outLen = len;
+    return buf;
+}
+
+bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
+    out.clear();
     HTTPClient http;
-    http.setTimeout(15000);
-    http.begin(client, url);
+    WiFiClientSecure* client = new WiFiClientSecure;
+    client->setInsecure();
+    client->setTimeout(15);
+
+    http.begin(*client, url);
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
     http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
     http.addHeader("Accept-Encoding", "identity");
 
+    Serial.printf("Idalgo: connecting %s (heap=%u max=%u)\n", url, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     int code = http.GET();
     if (code != 200) {
-        Serial.printf("Idalgo %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
-        http.end();
-        return false;
-    }
-
-    // Allocate parse buffer AFTER SSL handshake
-    _buf = (char*)malloc(BUF_SZ + 1);
-    if (!_buf) {
-        Serial.println("Idalgo: OOM for parse buffer");
-        http.end();
+        Serial.printf("Idalgo %s → HTTP %d (heap=%u)\n", url, code, ESP.getFreeHeap());
+        client->stop();
+        http.end(); delete client;
         return false;
     }
 
     WiFiClient* stream = http.getStreamPtr();
-    size_t overlapLen = 0;
-    size_t totalRead  = 0;
-    uint32_t stallMs = millis();
-
-    while (http.connected() || stream->available()) {
-        size_t avail = stream->available();
-        if (!avail) {
-            if (millis() - stallMs > 12000) { Serial.println("Idalgo: stream stall"); break; }
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-        stallMs = millis();
-
-        size_t space = BUF_SZ - overlapLen;
-        if (space == 0) {
-            // Buffer full but no deferred match found — skip (shouldn't happen)
-            Serial.println("Idalgo: buffer full, dropping");
-            overlapLen = 0;
-            space = BUF_SZ;
-        }
-
-        size_t toRead = min((size_t)avail, space);
-        size_t rd = stream->readBytes(_buf + overlapLen, toRead);
-        if (!rd) break;
-
-        size_t total = overlapLen + rd;
-        _buf[total] = '\0';
-        bool isLast = !http.connected() && !stream->available();
-        size_t deferOffset = parseChunk(_buf, total, out, isLast);
-
-        if (!isLast && deferOffset < total) {
-            // Keep from deferOffset to end as overlap for next chunk
-            size_t remaining = total - deferOffset;
-            memmove(_buf, _buf + deferOffset, remaining);
-            overlapLen = remaining;
-        } else {
-            overlapLen = 0;
-        }
-        totalRead += rd;
-        if (totalRead > 500000) break;
+    size_t totalLen = 0;
+    char* page = readEntireStream(stream, http, totalLen);
+    if (!page) {
+        Serial.println("Idalgo: failed to allocate page buffer");
+        client->stop(); http.end(); delete client;
+        return false;
     }
 
-    free(_buf); _buf = nullptr;
-    // http destructor runs after this return, client is still alive (owned by caller)
-    Serial.printf("Idalgo: %u bytes, %d results, %d fixtures, %d standings, round=%d\n",
-                  totalRead, out.result_count, out.fixture_count, out.standing_count, out.current_round);
+    Serial.printf("Idalgo: %u bytes total, parsing...\n", totalLen);
+    parseChunk(page, totalLen, out, true);
+    free(page);
+
+    client->stop();
+    http.end(); delete client;
+    Serial.printf("Idalgo: %u bytes, %d results, %d fixtures\n",
+                  totalLen, out.result_count, out.fixture_count);
     return true;
 }
 
-size_t IdalgoParser::parseChunk(const char* chunk, size_t len,
-                                CompetitionData& out, bool isLast) {
-    size_t deferOffset = len;
+int IdalgoParser::parseChunk(const char* chunk, size_t len,
+                              CompetitionData& out, bool isLast) {
     const char* pos = chunk;
     const char* end = chunk + len;
+    int found = 0;
+
+    // Extract journee links and standings first (usually in nav before match blocks)
+    extractRoundLinks(chunk, len, out);
+    parseStandingsChunk(chunk, len, out);
 
     while (pos < end) {
-        const char* divStart = strstr(pos, "data-match=\"");
+        const char* divStart = strstr(pos, "<div class=\"div_idalgo_dom_match div_idalgo_dom_match_rugby");
         if (!divStart) break;
 
-        const char* nextDiv = strstr(divStart + 12, "data-match=\"");
+        const char* blockEnd = strstr(divStart, "</li>");
+        if (blockEnd) blockEnd += 5; // include </li>
+        else blockEnd = end;
 
-        // Use next data-match as block boundary if available.
-        // Otherwise cap at MAX_BLOCK_SCAN bytes from divStart (all relevant data is within).
-        const char* blockEnd;
-        if (nextDiv) {
-            blockEnd = nextDiv;
-        } else {
-            blockEnd = divStart + MAX_BLOCK_SCAN;
-            if (blockEnd > end) blockEnd = end;
-        }
-
-        // Not enough data yet to cover MAX_BLOCK_SCAN — defer and wait for more
-        if (!isLast && !nextDiv && (size_t)(end - divStart) < MAX_BLOCK_SCAN) {
-            size_t d = (size_t)(divStart - chunk);
-            if (d < deferOffset) deferOffset = d;
-            break;
-        }
+        if (!isLast && blockEnd == end) break;
 
         MatchData m = {};
-        m.home_score = -1; m.away_score = -1; m.round = out.current_round;
+        m.home_score = -1; m.away_score = -1;
+        m.round = out.current_round;
 
-        if (parseMatchBlock(divStart, blockEnd, m) && m.home_name[0] && m.away_name[0]) {
-            if (m.round > out.current_round) out.current_round = m.round;
-
-            // Dedup: skip if same home+away pair already stored
-            auto isDupe = [&](const MatchData* arr, uint8_t cnt) -> bool {
-                for (int di = 0; di < cnt; di++) {
-                    if (m.home_slug[0] && arr[di].home_slug[0] &&
-                        strcmp(arr[di].home_slug, m.home_slug) == 0 &&
-                        strcmp(arr[di].away_slug, m.away_slug) == 0) return true;
-                    if (!m.home_slug[0] &&
-                        strcmp(arr[di].home_name, m.home_name) == 0 &&
-                        strcmp(arr[di].away_name, m.away_name) == 0) return true;
-                }
-                return false;
-            };
-
-            if (m.status == MatchStatus::Finished &&
-                out.result_count < CompetitionData::MAX_MATCHES &&
-                !isDupe(out.results, out.result_count))
-                out.results[out.result_count++] = m;
-            else if (m.status == MatchStatus::Scheduled &&
-                     out.fixture_count < CompetitionData::MAX_MATCHES &&
-                     !isDupe(out.fixtures, out.fixture_count))
-                out.fixtures[out.fixture_count++] = m;
-            else if (m.status == MatchStatus::Live &&
-                     out.result_count < CompetitionData::MAX_MATCHES &&
-                     !isDupe(out.results, out.result_count))
-                out.results[out.result_count++] = m;
-            Serial.printf("Idalgo match: %s vs %s status=%d\n",
-                          m.home_name, m.away_name, (int)m.status);
-        }
-        // Advance past divStart (not blockEnd) so next match starts from its own data-match
-        pos = nextDiv ? blockEnd : (divStart + 1);
-    }
-
-    // Parse standings on every chunk (duplicates are filtered inside)
-    {
-        size_t sd = parseStandings(chunk, len, out, isLast);
-        if (sd < deferOffset) deferOffset = sd;
-    }
-
-    // Detect current round from the "current day" nav indicator (most reliable).
-    // "Journée 21" inside span_idalgo_content_competition_navigation_days_listbox_current
-    {
-        char roundStr[24] = {};
-        if (readClassText(chunk, "span_idalgo_content_competition_navigation_days_listbox_current", roundStr, sizeof(roundStr))) {
-            const char* p = roundStr;
-            while (*p && !isdigit((unsigned char)*p)) p++;
-            int n = atoi(p);
-            if (n > 0) {
-                out.current_round = (uint8_t)n;
-                Serial.printf("Idalgo: detected round=%d from nav current\n", n);
+        if (parseMatchBlock(divStart, blockEnd, m)) {
+            // Deduplicate by (home, away) pair
+            bool exists = false;
+            for (int i = 0; i < out.result_count && !exists; i++) {
+                if (strcmp(out.results[i].home_slug, m.home_slug) == 0 &&
+                    strcmp(out.results[i].away_slug, m.away_slug) == 0)
+                    exists = true;
+            }
+            for (int i = 0; i < out.fixture_count && !exists; i++) {
+                if (strcmp(out.fixtures[i].home_slug, m.home_slug) == 0 &&
+                    strcmp(out.fixtures[i].away_slug, m.away_slug) == 0)
+                    exists = true;
+            }
+            if (!exists) {
+                if (m.status == MatchStatus::Finished &&
+                    out.result_count < CompetitionData::MAX_MATCHES)
+                    out.results[out.result_count++] = m;
+                else if (m.status == MatchStatus::Scheduled &&
+                         out.fixture_count < CompetitionData::MAX_MATCHES)
+                    out.fixtures[out.fixture_count++] = m;
+                else if (m.status == MatchStatus::Live &&
+                         out.result_count < CompetitionData::MAX_MATCHES)
+                    out.results[out.result_count++] = m;
+                found++;
             }
         }
+        pos = blockEnd;
     }
-
-    // Fallback: infer from "/journee-N/xxx" hrefs in nav links
-    // Also extracts round_url_base = id + round from /resultats/ID/journee-N links.
-    int journeeLinks = 0;
-    const char* jp = chunk;
-    while ((jp = strstr(jp, "/journee-")) != nullptr && jp < end) {
-        int n = atoi(jp + 9);
-        const char* sl = strchr(jp + 9, '/');
-        if (n > 0 && (!sl || strncmp(sl, "/resultats", 10) == 0 || strncmp(sl, "/calendrier", 11) == 0)) {
-            journeeLinks++;
-            // Only use link rounds for round_url_base, NOT for current_round
-            // (links include past and future rounds, max is wrong)
-            // Extract ID from /resultats/ID/journee-N pattern
-            const char* rp = jp;
-            while (rp > chunk && *(rp - 1) != '"') rp--; // rewind to start of href
-            const char* res = strstr(rp, "/resultats/");
-            if (res && res < jp) {
-                int id = atoi(res + 11);
-                if (id > 0 && n > 0) {
-                    uint32_t base = (uint32_t)(id + n);
-                    if (base > out.round_url_base) out.round_url_base = base;
-                    Serial.printf("Idalgo: round_url_base=%u (id=%d round=%d)\n", base, id, n);
-                }
-            }
-        }
-        jp++;
-    }
-    if (out.current_round == 0 && journeeLinks > 0) {
-        // Last resort: take max from links if nav current wasn't found
-        jp = chunk;
-        while ((jp = strstr(jp, "/journee-")) != nullptr && jp < end) {
-            int n = atoi(jp + 9);
-            const char* sl = strchr(jp + 9, '/');
-            if (n > 0 && (!sl || strncmp(sl, "/resultats", 10) == 0 || strncmp(sl, "/calendrier", 11) == 0)) {
-                if (n > (int)out.current_round) out.current_round = (uint8_t)n;
-            }
-            jp++;
-        }
-        if (out.current_round > 0)
-            Serial.printf("Idalgo: detected round=%d from link fallback\n", out.current_round);
-    }
-
-    return deferOffset;
+    return found;
 }
 
-size_t IdalgoParser::parseStandings(const char* chunk, size_t len,
-                                    CompetitionData& out, bool isLast) {
-    const char* spos = chunk;
+void IdalgoParser::extractRoundLinks(const char* chunk, size_t len, CompetitionData& out) {
     const char* end = chunk + len;
-
-    while (spos < end && out.standing_count < CompetitionData::MAX_STANDING) {
-        const char* lineStart = strstr(spos, "div_idalgo_content_standing_line");
-        if (!lineStart || lineStart >= end) break;
-
-        const char* nextLine = strstr(lineStart + 30, "div_idalgo_content_standing_line");
-        const char* lineEnd = nextLine ? nextLine : end;
-
-        // If line is cut at chunk boundary and this isn't the last chunk, defer it
-        if (!isLast && !nextLine) {
-            return (size_t)(lineStart - chunk);
-        }
-
-        // Filter out header row: position cell must contain a number
-        char posStr[8] = {};
-        readClassText(lineStart, "span_idalgo_content_standing_position", posStr, sizeof(posStr));
-        int rank = atoi(posStr);
-        if (rank <= 0 || rank > CompetitionData::MAX_STANDING) {
-            spos = lineEnd;
-            continue;
-        }
-
-        StandingEntry entry = {};
-        entry.rank = (uint8_t)rank;
-
-        char name[64] = {};
-        // Try text between <a class="a_idalgo_content_standing_name">...</a>
-        if (!readClassText(lineStart, "a_idalgo_content_standing_name", name, sizeof(name))) {
-            // Fallback: title attribute (some mobile templates use it)
-            const char* aPos = strstr(lineStart, "a_idalgo_content_standing_name");
-            if (aPos && aPos < lineEnd) {
-                readAttrVal(aPos, "title", name, sizeof(name));
+    const char* p = chunk;
+    while (p < end) {
+        p = strstr(p, "resultats/");
+        if (!p) break;
+        p += 10; // skip "resultats/"
+        char* numEnd;
+        unsigned long id = strtoul(p, &numEnd, 10);
+        if (id > 0 && numEnd < end && strncmp(numEnd, "/journee-", 9) == 0) {
+            int round = atoi(numEnd + 9);
+            if (round > 0 && round < 40) {
+                out.round_ids[round] = (uint32_t)id;
+                if (round > out.current_round) out.current_round = round;
             }
+            p = numEnd + 9;
+        } else {
+            p = numEnd ? numEnd : (chunk + len);
         }
-
-        if (name[0]) {
-            const TeamEntry* t = findTeam(name);
-            if (t) {
-                strlcpy(entry.name,   t->canonical, sizeof(entry.name));
-                strlcpy(entry.abbrev, t->abbrev,    sizeof(entry.abbrev));
-                strlcpy(entry.slug,   t->slug,      sizeof(entry.slug));
-            } else {
-                char stripped[64];
-                stripAccents(name, stripped, sizeof(stripped));
-                strlcpy(entry.name, stripped, sizeof(entry.name));
-            }
-        }
-
-        char pts[8] = {}, played[8] = {}, diffStr[8] = {};
-        readClassText(lineStart, "span_idalgo_content_standing_points", pts, sizeof(pts));
-        readClassText(lineStart, "span_idalgo_content_standing_played", played, sizeof(played));
-        readClassText(lineStart, "span_idalgo_content_standing_dif",    diffStr, sizeof(diffStr));
-
-        entry.points = atoi(pts);
-        entry.played = atoi(played);
-        entry.diff   = atoi(diffStr);
-
-        // Deduplicate by name (same table may appear multiple times in HTML)
-        bool dupe = false;
-        for (int i = 0; i < out.standing_count; i++) {
-            if (strcmp(out.standings[i].name, entry.name) == 0) { dupe = true; break; }
-        }
-        if (!dupe && entry.name[0] && out.standing_count < CompetitionData::MAX_STANDING) {
-            out.standings[out.standing_count++] = entry;
-        }
-        spos = lineEnd;
     }
-    return len;  // all processed
+}
+
+void IdalgoParser::parseStandingsChunk(const char* chunk, size_t len, CompetitionData& out) {
+    const char* pos = chunk;
+    const char* end = chunk + len;
+    while (pos < end) {
+        const char* liStart = strstr(pos, "<li class=\"li_idalgo_content_standing li_idalgo_content_standing_team_");
+        if (!liStart) break;
+        const char* liEnd = strstr(liStart, "</li>");
+        if (!liEnd) break;
+        StandingEntry e = {};
+        if (parseStandingBlock(liStart, liEnd, e)) {
+            // Stop when we hit a second table (rank 1 after we already have entries)
+            if (e.rank == 1 && out.standing_count > 0) break;
+            if (out.standing_count < CompetitionData::MAX_STANDING)
+                out.standings[out.standing_count++] = e;
+        }
+        pos = liEnd + 5;
+    }
+}
+
+bool IdalgoParser::parseStandingBlock(const char* start, const char* end, StandingEntry& entry) {
+    char raw[64] = {};
+
+    // Team name
+    if (readClassText(start, "a_idalgo_content_standing_name", raw, sizeof(raw))) {
+        decodeHtmlEntities(raw);
+        const TeamEntry* t = findTeam(raw);
+        if (t) {
+            strlcpy(entry.name,   t->canonical, sizeof(entry.name));
+            strlcpy(entry.abbrev, t->abbrev,    sizeof(entry.abbrev));
+            strlcpy(entry.slug,   t->slug,      sizeof(entry.slug));
+        } else {
+            Serial.printf("Unknown standing team: '%s'\n", raw);
+            char stripped[64];
+            stripAccents(raw, stripped, sizeof(stripped));
+            strlcpy(entry.name, stripped, sizeof(entry.name));
+            strlcpy(entry.abbrev, stripped, 5);
+        }
+    } else {
+        return false;
+    }
+
+    // Position (mandatory)
+    if (readClassText(start, "span_idalgo_content_standing_position", raw, sizeof(raw)))
+        entry.rank = (uint8_t)atoi(raw);
+    else
+        return false;
+
+    // Points
+    if (readClassText(start, "span_idalgo_content_standing_points", raw, sizeof(raw)))
+        entry.points = (int16_t)atoi(raw);
+
+    // Played
+    if (readClassText(start, "span_idalgo_content_standing_played", raw, sizeof(raw)))
+        entry.played = (uint8_t)atoi(raw);
+
+    // Diff
+    if (readClassText(start, "span_idalgo_content_standing_dif", raw, sizeof(raw)))
+        entry.diff = (int16_t)atoi(raw);
+
+    return true;
 }
 
 const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, MatchData& match) {
-    // Status: data-status may be absent on some matches (e.g. last fixture in list)
     char status[4] = {};
-    bool hasStatus = readAttrVal(start, "data-status", status, sizeof(status));
-    if (hasStatus) {
-        if (strcmp(status, "0") == 0)
-            match.status = MatchStatus::Scheduled;
-        else if (strcmp(status, "1") == 0 || strcmp(status, "3") == 0)
-            match.status = MatchStatus::Finished;
-        else
-            match.status = MatchStatus::Live;
-    } else {
-        match.status = MatchStatus::Scheduled; // default, overridden by score below
-    }
+    if (!readAttrVal(start, "data-status", status, sizeof(status))) return nullptr;
 
-    // Round number: try data-round, data-journee, data-week in order
-    char rndStr[4] = {};
-    bool hasRound = readAttrVal(start, "data-round",   rndStr, sizeof(rndStr));
-    if (!hasRound) hasRound = readAttrVal(start, "data-journee", rndStr, sizeof(rndStr));
-    if (!hasRound) hasRound = readAttrVal(start, "data-week",    rndStr, sizeof(rndStr));
-    int rn = atoi(rndStr);
-    if (rn > 0) {
-        match.round = (uint8_t)rn;
-        Serial.printf("Idalgo: match %s vs %s has round attr=%d\n", match.home_name, match.away_name, rn);
-    }
+    if (strcmp(status, "0") == 0)
+        match.status = MatchStatus::Scheduled;
+    else if (strcmp(status, "1") == 0 || strcmp(status, "3") == 0)
+        match.status = MatchStatus::Finished;
+    else
+        match.status = MatchStatus::Live; // "7", "2"
 
     char raw[64] = {};
     if (readClassText(start, "localteam_txt", raw, sizeof(raw))) {
+        decodeHtmlEntities(raw);
         const TeamEntry* t = findTeam(raw);
         if (t) {
             strlcpy(match.home_name,   t->canonical, sizeof(match.home_name));
             strlcpy(match.home_abbrev, t->abbrev,    sizeof(match.home_abbrev));
             strlcpy(match.home_slug,   t->slug,      sizeof(match.home_slug));
         } else {
-            Serial.printf("Idalgo: unknown home team [%s]\n", raw);
+            Serial.printf("Unknown home team: '%s'\n", raw);
             char stripped[64];
             stripAccents(raw, stripped, sizeof(stripped));
             strlcpy(match.home_name, stripped, sizeof(match.home_name));
-            // Build a readable 4-char abbrev from first letters of words
-            char abbr[8] = {}; int ai = 0;
-            bool space = true;
-            for (int ci = 0; stripped[ci] && ai < 4; ci++) {
-                if (stripped[ci] == ' ' || stripped[ci] == '-') { space = true; }
-                else if (space) { abbr[ai++] = stripped[ci]; space = false; }
-            }
-            if (ai == 0) strlcpy(abbr, stripped, 5);
-            strlcpy(match.home_abbrev, abbr, sizeof(match.home_abbrev));
+            strlcpy(match.home_abbrev, stripped, 5);
         }
     }
 
     if (readClassText(start, "visitorteam_txt", raw, sizeof(raw))) {
+        decodeHtmlEntities(raw);
         const TeamEntry* t = findTeam(raw);
         if (t) {
             strlcpy(match.away_name,   t->canonical, sizeof(match.away_name));
             strlcpy(match.away_abbrev, t->abbrev,    sizeof(match.away_abbrev));
             strlcpy(match.away_slug,   t->slug,      sizeof(match.away_slug));
         } else {
-            Serial.printf("Idalgo: unknown away team [%s]\n", raw);
+            Serial.printf("Unknown away team: '%s'\n", raw);
             char stripped[64];
             stripAccents(raw, stripped, sizeof(stripped));
             strlcpy(match.away_name, stripped, sizeof(match.away_name));
-            char abbr[8] = {}; int ai = 0;
-            bool space = true;
-            for (int ci = 0; stripped[ci] && ai < 4; ci++) {
-                if (stripped[ci] == ' ' || stripped[ci] == '-') { space = true; }
-                else if (space) { abbr[ai++] = stripped[ci]; space = false; }
-            }
-            if (ai == 0) strlcpy(abbr, stripped, 5);
-            strlcpy(match.away_abbrev, abbr, sizeof(match.away_abbrev));
+            strlcpy(match.away_abbrev, stripped, 5);
         }
     }
 
@@ -379,9 +319,6 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
             gt = strchr(p2, '>');
             if (gt) { match.away_score = atoi(gt + 1); }
         }
-        // If we found scores but had no data-status, infer Finished
-        if (!hasStatus && match.home_score >= 0 && match.away_score >= 0)
-            match.status = MatchStatus::Finished;
     }
 
     if (match.status == MatchStatus::Live) {
@@ -392,43 +329,31 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
     }
 
     if (match.status == MatchStatus::Scheduled) {
-        // Parse time
-        char timeStr[8] = {};
-        readClassText(start, "idalgo_date_timezone", timeStr, sizeof(timeStr));
-        int kh = 0, km = 0;
-        bool hasTime = (sscanf(timeStr, "%d:%d", &kh, &km) == 2);
-
-        // Parse date: try data-date (DD/MM/YYYY or YYYY-MM-DD) then datetime ISO attr
-        char dateStr[32] = {};
-        readAttrVal(start, "data-date", dateStr, sizeof(dateStr));
-        if (!dateStr[0]) readAttrVal(start, "datetime", dateStr, sizeof(dateStr));
-
-        int yr = 0, mo = 0, dy = 0;
-        bool hasDate = false;
-
-        if (dateStr[0]) {
-            // ISO 8601: 2026-04-26T15:35:00+02:00 — also captures time
-            if (sscanf(dateStr, "%d-%d-%dT%d:%d", &yr, &mo, &dy, &kh, &km) >= 3 && yr > 2020) {
-                hasDate = true; hasTime = true;
-            // DD/MM/YYYY
-            } else if (sscanf(dateStr, "%d/%d/%d", &dy, &mo, &yr) == 3 && yr > 2020) {
-                hasDate = true;
-            // YYYY-MM-DD
-            } else if (sscanf(dateStr, "%d-%d-%d", &yr, &mo, &dy) == 3 && yr > 2020) {
-                hasDate = true;
+        if (readAttrVal(start, "data-value-default", raw, sizeof(raw))) {
+            // Parse "Sat Apr 25 2026 14:30:00 +0200"
+            char mon[4];
+            int day, year, hh, mm, ss, tzh;
+            if (sscanf(raw, "%*s %3s %d %d %d:%d:%d %d", mon, &day, &year, &hh, &mm, &ss, &tzh) == 7) {
+                static const char* MONTHS[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+                int month = 0;
+                for (int i = 0; i < 12; i++) {
+                    if (strcasecmp(mon, MONTHS[i]) == 0) { month = i + 1; break; }
+                }
+                struct tm tm = {};
+                tm.tm_year = year - 1900;
+                tm.tm_mon  = month - 1;
+                tm.tm_mday = day;
+                tm.tm_hour = hh;
+                tm.tm_min  = mm;
+                tm.tm_sec  = ss;
+                match.kickoff_utc = mktime(&tm);
             }
-        }
-
-        if (hasDate && hasTime) {
-            struct tm t = {};
-            t.tm_year = yr - 1900; t.tm_mon = mo - 1; t.tm_mday = dy;
-            t.tm_hour = kh; t.tm_min = km; t.tm_isdst = -1;
-            match.kickoff_utc = mktime(&t); // Paris local time → UTC epoch
-        } else if (hasTime) {
-            match.kickoff_utc = (time_t)(kh * 3600 + km * 60);
-            if (match.home_name[0] && match.away_name[0])
-                Serial.printf("Idalgo: no date for %s vs %s (time only)\n",
-                              match.home_name, match.away_name);
+        } else if (readClassText(start, "idalgo_date_timezone", raw, sizeof(raw))) {
+            // Fallback to HH:MM only (legacy pages without data-value-default)
+            int h = 0, m2 = 0;
+            if (sscanf(raw, "%d:%d", &h, &m2) == 2) {
+                match.kickoff_utc = (time_t)(h * 3600 + m2 * 60);
+            }
         }
     }
 
@@ -447,26 +372,6 @@ bool IdalgoParser::readAttrVal(const char* html, const char* attr, char* dst, si
     return i > 0;
 }
 
-// Decode common French HTML entities in-place (e.g. &egrave; → è in UTF-8)
-static void decodeHtmlEntities(char* s) {
-    static const struct { const char* entity; const char* utf8; } ENT[] = {
-        {"&eacute;", "\xc3\xa9"}, {"&egrave;", "\xc3\xa8"}, {"&ecirc;",  "\xc3\xaa"},
-        {"&ecirc;",  "\xc3\xaa"}, {"&agrave;", "\xc3\xa0"}, {"&acirc;",  "\xc3\xa2"},
-        {"&ccedil;", "\xc3\xa7"}, {"&ocirc;",  "\xc3\xb4"}, {"&ucirc;",  "\xc3\xbb"},
-        {"&ugrave;", "\xc3\xb9"}, {"&Eacute;", "\xc3\x89"}, {"&amp;",    "&"},
-        {"&nbsp;",   " "},        {nullptr, nullptr}
-    };
-    for (int e = 0; ENT[e].entity; e++) {
-        size_t elen = strlen(ENT[e].entity);
-        size_t ulen = strlen(ENT[e].utf8);
-        char* p;
-        while ((p = strstr(s, ENT[e].entity)) != nullptr) {
-            memmove(p + ulen, p + elen, strlen(p + elen) + 1);
-            memcpy(p, ENT[e].utf8, ulen);
-        }
-    }
-}
-
 bool IdalgoParser::readClassText(const char* html, const char* cls, char* dst, size_t dstLen) {
     const char* pos = strstr(html, cls);
     if (!pos) return false;
@@ -478,6 +383,228 @@ bool IdalgoParser::readClassText(const char* html, const char* cls, char* dst, s
     dst[i] = '\0';
     while (i > 0 && (dst[i-1] == ' ' || dst[i-1] == '\n' || dst[i-1] == '\r'))
         dst[--i] = '\0';
-    decodeHtmlEntities(dst);
-    return dst[0] != '\0';
+    return i > 0;
 }
+
+// ── Champions Cup calendar page — pools + finals, single source ─────────────
+
+bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
+    out.clear();
+    const int TEMP_MAX = 80;
+    MatchData* temp = new MatchData[TEMP_MAX];
+    int tempCount = 0;
+
+    HTTPClient http;
+    WiFiClientSecure* client = new WiFiClientSecure;
+    client->setInsecure();
+    client->setTimeout(15);
+
+    http.begin(*client, url);
+    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
+    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
+    http.addHeader("Accept-Encoding", "identity");
+
+    Serial.printf("IdalgoCalendar: connecting %s (heap=%u max=%u)\n", url, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    int code = http.GET();
+    if (code != 200) {
+        Serial.printf("IdalgoCalendar %s → HTTP %d (heap=%u)\n", url, code, ESP.getFreeHeap());
+        client->stop();
+        http.end(); delete client;
+        delete[] temp;
+        return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    size_t totalLen = 0;
+    char* page = readEntireStream(stream, http, totalLen);
+    if (!page) {
+        Serial.println("IdalgoCalendar: failed to allocate page buffer");
+        client->stop(); http.end(); delete client;
+        delete[] temp;
+        return false;
+    }
+
+    Serial.printf("IdalgoCalendar: %u bytes total, parsing...\n", totalLen);
+    parseCalendarChunk(page, totalLen, temp, tempCount, TEMP_MAX, true);
+    free(page);
+
+    client->stop();
+    http.end(); delete client;
+
+    // ── Filter pools: scheduled + last 12 finished ──
+    int scheduledPools = 0;
+    int totalPoolFinished = 0;
+    for (int i = 0; i < tempCount; i++) {
+        bool isPool = (strncmp(temp[i].group, "Gr.", 3) == 0);
+        if (isPool && temp[i].status == MatchStatus::Scheduled) scheduledPools++;
+        if (isPool && temp[i].status == MatchStatus::Finished) totalPoolFinished++;
+    }
+
+    int poolFinishedSeen = 0;
+    for (int i = 0; i < tempCount; i++) {
+        bool isPool = (strncmp(temp[i].group, "Gr.", 3) == 0);
+        bool keep = false;
+        if (isPool) {
+            if (scheduledPools > 0) {
+                // Pool phase ongoing → keep scheduled + last 12 finished
+                if (temp[i].status == MatchStatus::Scheduled) keep = true;
+                else if (temp[i].status == MatchStatus::Finished) {
+                    poolFinishedSeen++;
+                    keep = (poolFinishedSeen > totalPoolFinished - 12);
+                }
+            } else {
+                // Pools finished → discard
+                keep = false;
+            }
+        } else {
+            keep = true; // finals always kept
+        }
+        if (!keep) continue;
+
+        if (temp[i].status == MatchStatus::Finished && out.result_count < CompetitionData::MAX_MATCHES)
+            out.results[out.result_count++] = temp[i];
+        else if (temp[i].status == MatchStatus::Scheduled && out.fixture_count < CompetitionData::MAX_MATCHES)
+            out.fixtures[out.fixture_count++] = temp[i];
+        else if (temp[i].status == MatchStatus::Live && out.result_count < CompetitionData::MAX_MATCHES)
+            out.results[out.result_count++] = temp[i];
+    }
+
+    delete[] temp;
+    Serial.printf("IdalgoCalendar: %u bytes, %d temp, %d results, %d fixtures\n",
+                  totalLen, tempCount, out.result_count, out.fixture_count);
+    return true;
+}
+
+int IdalgoParser::parseCalendarChunk(const char* chunk, size_t len,
+                                      MatchData* temp, int& tempCount, int tempMax,
+                                      bool isLast) {
+    const char* pos = chunk;
+    const char* end = chunk + len;
+    int found = 0;
+
+    // The calendar page uses a single format for all matches (pools + finals).
+    // Finals are also present in <li class="li_idalgo_content_result_match"> but
+    // those are 100% redundant — we skip them.
+    while (pos < end && tempCount < tempMax) {
+        const char* liStart = strstr(pos, "<li class=\"li_idalgo_content_calendar_cup_date_match\"");
+        if (!liStart) break;
+        const char* liEnd = strstr(liStart, "</li>");
+        if (!liEnd) break;
+
+        MatchData m = {};
+        m.home_score = -1; m.away_score = -1;
+        if (parseCalendarPoolBlock(liStart, liEnd, m)) {
+            temp[tempCount++] = m;
+            found++;
+        }
+        pos = liEnd + 5;
+    }
+    return found;
+}
+
+bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, MatchData& match) {
+    char raw[64] = {};
+
+    // data-state: 0=scheduled, 1=finished
+    if (!readAttrVal(start, "data-state", raw, sizeof(raw))) return false;
+    if (strcmp(raw, "0") == 0)
+        match.status = MatchStatus::Scheduled;
+    else if (strcmp(raw, "1") == 0)
+        match.status = MatchStatus::Finished;
+    else
+        match.status = MatchStatus::Live;
+
+    // Round
+    if (readAttrVal(start, "data-round", raw, sizeof(raw)))
+        match.round = (uint8_t)atoi(raw);
+
+    // Group / pool: <div class="div_idalgo_content_calendar_cup_date_match_ctx"><span>Gr. 1</span>
+    const char* ctxPos = strstr(start, "div_idalgo_content_calendar_cup_date_match_ctx");
+    if (ctxPos && ctxPos < end) {
+        const char* spanPos = strstr(ctxPos, "<span>");
+        if (spanPos && spanPos < end) {
+            spanPos += 6;
+            size_t i = 0;
+            while (spanPos[i] && spanPos[i] != '<' && i + 1 < sizeof(raw)) {
+                raw[i] = spanPos[i]; i++;
+            }
+            raw[i] = '\0';
+            strlcpy(match.group, raw, sizeof(match.group));
+        }
+    }
+
+    // Home team
+    const char* homePos = strstr(start, "a_idalgo_content_calendar_cup_date_match_local");
+    if (homePos && homePos < end) {
+        if (readAttrVal(homePos, "title", raw, sizeof(raw))) {
+            decodeHtmlEntities(raw);
+            const TeamEntry* t = findTeam(raw);
+            if (t) {
+                strlcpy(match.home_name,   t->canonical, sizeof(match.home_name));
+                strlcpy(match.home_abbrev, t->abbrev,    sizeof(match.home_abbrev));
+                strlcpy(match.home_slug,   t->slug,      sizeof(match.home_slug));
+            } else {
+                char stripped[64];
+                stripAccents(raw, stripped, sizeof(stripped));
+                strlcpy(match.home_name, stripped, sizeof(match.home_name));
+                strlcpy(match.home_abbrev, stripped, 5);
+            }
+        }
+    }
+
+    // Away team
+    const char* awayPos = strstr(start, "a_idalgo_content_calendar_cup_date_match_visitor");
+    if (awayPos && awayPos < end) {
+        if (readAttrVal(awayPos, "title", raw, sizeof(raw))) {
+            decodeHtmlEntities(raw);
+            const TeamEntry* t = findTeam(raw);
+            if (t) {
+                strlcpy(match.away_name,   t->canonical, sizeof(match.away_name));
+                strlcpy(match.away_abbrev, t->abbrev,    sizeof(match.away_abbrev));
+                strlcpy(match.away_slug,   t->slug,      sizeof(match.away_slug));
+            } else {
+                char stripped[64];
+                stripAccents(raw, stripped, sizeof(stripped));
+                strlcpy(match.away_name, stripped, sizeof(match.away_name));
+                strlcpy(match.away_abbrev, stripped, 5);
+            }
+        }
+    }
+
+    // Score
+    const char* scoreLeft = strstr(start, "span_idalgo_score_part_left");
+    if (scoreLeft && scoreLeft < end) {
+        const char* gt = strchr(scoreLeft, '>');
+        if (gt) match.home_score = atoi(gt + 1);
+    }
+    const char* scoreRight = strstr(start, "span_idalgo_score_part_right");
+    if (scoreRight && scoreRight < end) {
+        const char* gt = strchr(scoreRight, '>');
+        if (gt) match.away_score = atoi(gt + 1);
+    }
+
+    // Absolute date
+    if (readAttrVal(start, "data-value-default", raw, sizeof(raw))) {
+        char mon[4];
+        int day, year, hh, mm, ss, tzh;
+        if (sscanf(raw, "%*s %3s %d %d %d:%d:%d %d", mon, &day, &year, &hh, &mm, &ss, &tzh) == 7) {
+            static const char* MONTHS[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+            int month = 0;
+            for (int i = 0; i < 12; i++) {
+                if (strcasecmp(mon, MONTHS[i]) == 0) { month = i + 1; break; }
+            }
+            struct tm tm = {};
+            tm.tm_year = year - 1900;
+            tm.tm_mon  = month - 1;
+            tm.tm_mday = day;
+            tm.tm_hour = hh;
+            tm.tm_min  = mm;
+            tm.tm_sec  = ss;
+            match.kickoff_utc = mktime(&tm);
+        }
+    }
+
+    return true;
+}
+
+

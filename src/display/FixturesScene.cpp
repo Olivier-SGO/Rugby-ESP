@@ -24,6 +24,7 @@ void FixturesScene::setMatch(const MatchData& m, const char* comp,
     _md.minute      = m.minute;
     _md.kickoff_utc = m.kickoff_utc;
     _md.round       = m.round;
+    strlcpy(_md.group, m.group, sizeof(_md.group));
     strlcpy(_comp, comp, sizeof(_comp));
     _headerColor = headerColor; _index = index; _total = total;
 }
@@ -49,10 +50,19 @@ void FixturesScene::render() {
     int lw = gCompLogoLgW[_compIdx];
     Display.drawBitmap565(CENTER_MID - lw / 2, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
 
+    // Round / group indicator on home logo bottom-left
+    if (_md.group[0]) {
+        Display.drawText(2, 63, _md.group, C_GREY, f8);
+    } else if (_md.round > 0) {
+        char rnd[8];
+        snprintf(rnd, sizeof(rnd), "J%d", _md.round);
+        Display.drawText(2, 63, rnd, C_GREY, f8);
+    }
+
     // Team abbreviations with shadow, pushed to edges
-    Display.drawTextShadow(CENTER_X + 2, 44, _md.home_abbrev, C_WHITE, f8);
+    Display.drawTextShadow(CENTER_X + 2, 36, _md.home_abbrev, C_WHITE, f8);
     Display.getTextBounds(_md.away_abbrev, 0, 0, &x1, &y1, &tw, &th, f8);
-    Display.drawTextShadow(CENTER_X + CENTER_W - tw - 2, 44, _md.away_abbrev, C_WHITE, f8);
+    Display.drawTextShadow(CENTER_X + CENTER_W - tw - 2, 36, _md.away_abbrev, C_WHITE, f8);
 
     // Date + time centered
     if (_md.kickoff_utc > 0) {
@@ -62,7 +72,7 @@ void FixturesScene::render() {
                  DAYS_FR[t->tm_wday], t->tm_mday, MONTHS_FR[t->tm_mon + 1]);
 
         Display.getTextBounds(dateLine, 0, 0, &x1, &y1, &tw, &th, f10);
-        Display.drawTextShadow(CENTER_MID - tw / 2, 54, dateLine, C_GOLD, f10);
+        Display.drawTextShadow(CENTER_MID - tw / 2, 48, dateLine, C_GOLD, f10);
 
         if (!(t->tm_hour <= 2 && t->tm_min == 0)) {
             char timeLine[8];
@@ -72,7 +82,7 @@ void FixturesScene::render() {
         }
     } else {
         Display.getTextBounds("Horaire TBD", 0, 0, &x1, &y1, &tw, &th, f8);
-        Display.drawText(CENTER_MID - tw / 2, 54, "Horaire TBD", C_GREY, f8);
+        Display.drawText(CENTER_MID - tw / 2, 48, "Horaire TBD", C_GREY, f8);
     }
 
     // Counter bottom-right

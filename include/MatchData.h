@@ -21,6 +21,7 @@ struct MatchData {
     int8_t   minute;          // -1 = HT, 0 = unknown, >0 = minute
     time_t   kickoff_utc;     // 0 = TBD
     uint8_t  round;           // journée number
+    char     group[16];       // pool / phase name (e.g. "P1", "1/4F") — CC only
 };
 
 // Lightweight copy stored in ScoreboardScene/FixturesScene — no team names needed
@@ -35,6 +36,7 @@ struct MatchDisplay {
     int8_t      minute;
     time_t      kickoff_utc;
     uint8_t     round;
+    char        group[16];
 };
 
 struct StandingEntry {
@@ -58,12 +60,13 @@ struct CompetitionData {
     uint8_t      fixture_count;
     uint8_t      standing_count;
     uint8_t      current_round;
-    uint32_t     round_url_base; // base ID for journee URLs: id + round (e.g. 11608)
+    uint32_t     round_ids[40];  // round → url_id mapping (index = round number)
     time_t       last_updated;
 
     void clear() {
         result_count = fixture_count = standing_count = current_round = 0;
-        round_url_base = 0;
+
+        for (int i = 0; i < 40; i++) round_ids[i] = 0;
         last_updated = 0;
     }
 };

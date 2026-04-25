@@ -1,11 +1,7 @@
 #include "DataFetcher.h"
 #include "IdalgoParser.h"
-#include "WorldRugbyAPI.h"
-#include "DisplayManager.h"
-#include "SceneManager.h"
-#include "WiFiManager.h"
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
+#include "credentials.h"
 #include "config.h"
 #include <Arduino.h>
 
@@ -13,22 +9,13 @@ DataFetcher Fetcher;
 
 void DataFetcher::begin(MatchDB* db) {
     _db = db;
-    // Reset WiFi state so the task reconnects (caller may have called WiFi.mode(WIFI_OFF))
-    _wifiOk = false;
-    // Don't re-fetch immediately after boot fetch; respect normal poll interval
-    _lastIdalgo = millis();
-
-    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-        Serial.println("WiFi lost — reconnecting...");
-        WiFi.reconnect();
-    }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-    xTaskCreatePinnedToCore(taskFunc, "DataFetcher", 16384, this, 1, nullptr, 0);
+    xTaskCreatePinnedToCore(taskFunc, "DataFetcher", 20480, this, 1, nullptr, 0);
 }
 
 void DataFetcher::taskFunc(void* param) {
     DataFetcher* self = static_cast<DataFetcher*>(param);
-    self->connectWiFi();
-    if (self->isWiFiConnected() && !self->_timeSynced) self->syncNTP();
+    if (WiFi.status() != WL_CONNECTED) self->connectWiFi();
+    if (!self->_timeSynced) self->syncNTP();
     for (;;) {
         self->loop();
         vTaskDelay(pdMS_TO_TICKS(5000));
@@ -36,15 +23,45 @@ void DataFetcher::taskFunc(void* param) {
 }
 
 void DataFetcher::connectWiFi() {
-    if (WiFi.status() == WL_CONNECTED) { _wifiOk = true; return; }
-    _wifiOk = WiFiManager::connect();
+    if (WiFi.status() == WL_CONNECTED) {
+        _wifiOk = true;
+        return;
+    }
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print("WiFi connecting");
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        Serial.print('.');
+    }
+    _wifiOk = (WiFi.status() == WL_CONNECTED);
+    Serial.println(_wifiOk ? " OK" : " FAILED");
+    if (_wifiOk) {
+        Serial.printf("WiFi IP: %s  GW: %s  DNS: %s\n",
+                      WiFi.localIP().toString().c_str(),
+                      WiFi.gatewayIP().toString().c_str(),
+                      WiFi.dnsIP().toString().c_str());
+        // Quick DNS test
+        IPAddress testIp;
+        if (WiFi.hostByName("www.ladepeche.fr", testIp)) {
+            Serial.printf("DNS test: www.ladepeche.fr → %s\n", testIp.toString().c_str());
+        } else {
+            Serial.println("DNS test: www.ladepeche.fr → FAILED");
+        }
+    }
 }
 
 void DataFetcher::syncNTP() {
-    setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
-    tzset();
-
-    configTime(0, 0, "time.cloudflare.com", "162.159.200.1", "216.239.35.0");
+    static bool configured = false;
+    if (!configured) {
+        setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
+        tzset();
+        configTime(0, 0, "pool.ntp.org", "time.google.com");
+        configured = true;
+    }
     Serial.print("NTP sync");
     uint32_t start = millis();
     time_t now = 0;
@@ -54,182 +71,102 @@ void DataFetcher::syncNTP() {
         Serial.print('.');
     }
     _timeSynced = (now > 1000000000L);
-    Serial.printf(" %s (epoch=%lld)\n", _timeSynced ? "OK" : "FAILED", (long long)now);
+    Serial.println(_timeSynced ? " OK" : " FAILED");
 }
 
 void DataFetcher::loop() {
     uint32_t now = millis();
+    if (WiFi.status() != WL_CONNECTED) {
+        _wifiOk = false;
+        connectWiFi();
+        return;
+    }
     if (!_wifiOk) { connectWiFi(); return; }
+    if (!_timeSynced) { syncNTP(); return; }
 
-    if (!_timeSynced && now - _lastNTP > 60000) {
-        syncNTP();
-        _lastNTP = now;
-    }
-    if (_timeSynced && now - _lastNTP > NTP_INTERVAL_MS) {
-        syncNTP();
-        _lastNTP = now;
-    }
-
-    bool live = _db->hasLive();
-    uint32_t pollMs = live ? POLL_LIVE_MS : POLL_NORMAL_MS;
+    uint32_t pollMs = _db->hasLive() ? POLL_LIVE_MS : POLL_NORMAL_MS;
     if (now - _lastIdalgo > pollMs || _lastIdalgo == 0) {
-        if (_rendererHandle) vTaskSuspend(_rendererHandle);
-        Scenes.freeAllLogos();  // no-op: logos are in PSRAM, but keep suspend/resume for safety
-        if (live)
-            fetchLive();
-        else
-            fetchAll();
-        if (_rendererHandle) vTaskResume(_rendererHandle);
-        Scenes.markDirty();
+        fetchAll();
         _lastIdalgo = now;
+    }
+    if (now - _lastNTP > NTP_INTERVAL_MS) {
+        syncNTP();
+        _lastNTP = now;
     }
 }
 
 void DataFetcher::fetchAll() {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(20); // 20s socket timeout covers TLS handshake
-
     IdalgoParser idalgo;
-    CompetitionData d;
+    CompetitionData top14, prod2, cc;
 
-    d.clear();
-    idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats", d, client);
-    idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/calendrier", d, client);
-    fetchNextJournee(d, "top-14/phase-reguliere", idalgo, client);
-    if (d.result_count || d.fixture_count || d.standing_count) _db->updateTop14(d);
-    Serial.printf("Top14: round=%d res=%d fix=%d stand=%d\n", d.current_round, d.result_count, d.fixture_count, d.standing_count);
+    const char* top14Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats";
+    const char* prod2Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats";
 
-    d.clear();
-    idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats", d, client);
-    idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/calendrier", d, client);
-    fetchNextJournee(d, "pro-d2/phase-reguliere", idalgo, client);
-    if (d.result_count || d.fixture_count || d.standing_count) _db->updateProd2(d);
-    Serial.printf("ProD2: round=%d res=%d fix=%d stand=%d\n", d.current_round, d.result_count, d.fixture_count, d.standing_count);
+    Serial.printf("FetchAll: heap=%u max=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    if (idalgo.fetch(top14Base, top14)) {
+        fetchNextJournee(top14, top14Base, idalgo);
+        _db->updateTop14(top14);
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
 
-    d.clear();
-    fetchCC(client, idalgo, d);
+    Serial.printf("FetchAll: heap=%u max=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    if (idalgo.fetch(prod2Base, prod2)) {
+        fetchNextJournee(prod2, prod2Base, idalgo);
+        _db->updateProd2(prod2);
+    }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    Serial.printf("FetchAll: heap=%u max=%u (before CC)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    fetchCC(idalgo, cc);
+    _db->updateCC(cc);
 
     _firstFetchDone = true;
-    Serial.printf("fetchAll done — heap: %u\n", ESP.getFreeHeap());
     _db->persist();
+    Serial.printf("Fetch done — heap: %u max=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 void DataFetcher::fetchLive() {
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(20);
+    // Placeholder — réintroduit en Phase 2 si nécessaire
+    fetchAll();
+}
 
-    IdalgoParser idalgo;
-    CompetitionData d;
-
-    uint8_t mask = _db->liveMask();  // bit0=top14, bit1=prod2, bit2=cc
-
-    if (mask & 1) {
-        d.clear();
-        idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats", d, client);
-        idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/calendrier", d, client);
-        fetchNextJournee(d, "top-14/phase-reguliere", idalgo, client);
-        if (d.result_count || d.fixture_count) _db->updateTop14(d);
+static bool isDuplicateMatch(const CompetitionData& d, const MatchData& m, bool fixture) {
+    const MatchData* arr = fixture ? d.fixtures : d.results;
+    int cnt = fixture ? d.fixture_count : d.result_count;
+    for (int i = 0; i < cnt; i++) {
+        if (strcmp(arr[i].home_slug, m.home_slug) == 0 &&
+            strcmp(arr[i].away_slug, m.away_slug) == 0)
+            return true;
     }
+    return false;
+}
 
-    if (mask & 2) {
-        d.clear();
-        idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats", d, client);
-        idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/calendrier", d, client);
-        fetchNextJournee(d, "pro-d2/phase-reguliere", idalgo, client);
-        if (d.result_count || d.fixture_count) _db->updateProd2(d);
-    }
-
-    if (mask & 4) {
-        d.clear();
-        fetchCC(client, idalgo, d);
-    }
-
-    _firstFetchDone = true;
-    Serial.printf("fetchLive (mask=%u) done — heap: %u\n", mask, ESP.getFreeHeap());
-    _db->persist();
+void DataFetcher::fetchCC(IdalgoParser& idalgo, CompetitionData& d) {
+    // Single calendar page covers pools + all final phases
+    idalgo.fetchCalendar("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup/calendrier", d);
 }
 
 void DataFetcher::fetchNextJournee(CompetitionData& d, const char* compPath,
-                                    IdalgoParser& idalgo, WiFiClientSecure& client) {
-    if (d.current_round == 0) {
-        Serial.printf("fetchNextJournee: no round detected for %s\n", compPath);
-        return;
+                                    IdalgoParser& idalgo) {
+    if (d.current_round == 0) return;
+    int nextRound = d.current_round + 1;
+    if (nextRound >= 40) return;
+    uint32_t nextId = d.round_ids[nextRound];
+    if (nextId == 0) return;
+
+    char url[200];
+    snprintf(url, sizeof(url), "%s/%lu/journee-%d", compPath, nextId, nextRound);
+    Serial.printf("NextJournee: %s\n", url);
+
+    CompetitionData next;
+    if (!idalgo.fetch(url, next)) return;
+
+    for (int i = 0; i < next.fixture_count && d.fixture_count < CompetitionData::MAX_MATCHES; i++) {
+        if (!isDuplicateMatch(d, next.fixtures[i], true))
+            d.fixtures[d.fixture_count++] = next.fixtures[i];
     }
-    char url[192];
-
-    auto buildUrl = [&](uint8_t round) {
-        if (d.round_url_base > 0) {
-            uint32_t url_id = d.round_url_base - round;
-            snprintf(url, sizeof(url),
-                "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/resultats/%u/journee-%u",
-                compPath, (unsigned)url_id, (unsigned)round);
-        } else {
-            // Fallback to old format (may 404 on newer Idalgo layouts)
-            snprintf(url, sizeof(url),
-                "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/journee-%u/resultats",
-                compPath, (unsigned)round);
-        }
-    };
-
-    // Fetch current round explicitly — catches split-weekend journées
-    uint8_t prevRes = d.result_count;
-    buildUrl(d.current_round);
-    idalgo.fetch(url, d, client);
-    if (d.result_count > prevRes)
-        Serial.printf("fetchNextJournee: +%d results from journee-%u\n",
-                      d.result_count - prevRes, (unsigned)d.current_round);
-
-    // Fetch next round
-    buildUrl(d.current_round + 1);
-    uint8_t prevFix = d.fixture_count;
-    idalgo.fetch(url, d, client);
-    for (int i = prevFix; i < d.fixture_count; i++)
-        d.fixtures[i].round = d.current_round + 1;
-    if (d.fixture_count > prevFix)
-        Serial.printf("fetchNextJournee: +%d fixtures from journee-%u\n",
-                      d.fixture_count - prevFix, (unsigned)(d.current_round + 1));
-}
-
-void DataFetcher::fetchCC(WiFiClientSecure& client, IdalgoParser& idalgo, CompetitionData& d) {
-    static const char* PHASES[] = {
-        "1-4-de-finale", "phase-reguliere", "demi-finales", "finale", nullptr
-    };
-    const char* base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup";
-
-    // Try cached phase first
-    if (_ccPhaseBase[0]) {
-        char url[160];
-        snprintf(url, sizeof(url), "%s/resultats", _ccPhaseBase);
-        idalgo.fetch(url, d, client);
-        snprintf(url, sizeof(url), "%s/calendrier", _ccPhaseBase);
-        idalgo.fetch(url, d, client);
-        if (d.result_count > 0 || d.fixture_count > 0) {
-            _db->updateCC(d);
-            Serial.printf("CC(%s): %d res %d fix\n", _ccPhaseBase + strlen(base) + 1,
-                          d.result_count, d.fixture_count);
-            return;
-        }
-        Serial.println("CC: cached phase empty — scanning list");
-        _ccPhaseBase[0] = '\0';
+    for (int i = 0; i < next.result_count && d.result_count < CompetitionData::MAX_MATCHES; i++) {
+        if (!isDuplicateMatch(d, next.results[i], false))
+            d.results[d.result_count++] = next.results[i];
     }
-
-    // Try each known phase, stop at first with data
-    for (int i = 0; PHASES[i]; i++) {
-        d.clear();
-        char url[160];
-        snprintf(url, sizeof(url), "%s/%s/resultats", base, PHASES[i]);
-        idalgo.fetch(url, d, client);
-        snprintf(url, sizeof(url), "%s/%s/calendrier", base, PHASES[i]);
-        idalgo.fetch(url, d, client);
-        if (d.result_count > 0 || d.fixture_count > 0) {
-            snprintf(_ccPhaseBase, sizeof(_ccPhaseBase), "%s/%s", base, PHASES[i]);
-            Serial.printf("CC phase locked: %s (%d res %d fix)\n",
-                          PHASES[i], d.result_count, d.fixture_count);
-            _db->updateCC(d);
-            return;
-        }
-    }
-    Serial.println("CC: no data in any phase");
 }

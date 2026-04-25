@@ -1,4 +1,5 @@
 #include "MatchDB.h"
+#include "MatchRecord.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
@@ -10,19 +11,73 @@ void MatchDB::begin() {
     load();
 }
 
+static bool sameMatch(const MatchData& a, const MatchData& b) {
+    if (a.home_slug[0] && b.home_slug[0])
+        return strcmp(a.home_slug, b.home_slug) == 0 && strcmp(a.away_slug, b.away_slug) == 0;
+    return strcmp(a.home_name, b.home_name) == 0 && strcmp(a.away_name, b.away_name) == 0;
+}
+
+static int findMatch(const MatchData* arr, uint8_t cnt, const MatchData& m) {
+    for (int i = 0; i < cnt; i++) if (sameMatch(arr[i], m)) return i;
+    return -1;
+}
+
+static void removeMatch(MatchData* arr, uint8_t& cnt, int idx) {
+    for (int i = idx; i < cnt - 1; i++) arr[i] = arr[i + 1];
+    cnt--;
+}
+
+static void mergeCompetition(CompetitionData& dst, const CompetitionData& src) {
+    // Merge results: update existing, add new
+    for (int i = 0; i < src.result_count; i++) {
+        int idx = findMatch(dst.results, dst.result_count, src.results[i]);
+        if (idx >= 0) {
+            dst.results[idx] = src.results[i];
+        } else if (dst.result_count < CompetitionData::MAX_MATCHES) {
+            dst.results[dst.result_count++] = src.results[i];
+        }
+    }
+    // Merge fixtures: update existing, add new
+    for (int i = 0; i < src.fixture_count; i++) {
+        int idx = findMatch(dst.fixtures, dst.fixture_count, src.fixtures[i]);
+        if (idx >= 0) {
+            dst.fixtures[idx] = src.fixtures[i];
+        } else if (dst.fixture_count < CompetitionData::MAX_MATCHES) {
+            dst.fixtures[dst.fixture_count++] = src.fixtures[i];
+        }
+    }
+    // If a match moved from fixtures to results, remove it from fixtures
+    for (int i = 0; i < src.result_count; i++) {
+        int idx = findMatch(dst.fixtures, dst.fixture_count, src.results[i]);
+        if (idx >= 0) removeMatch(dst.fixtures, dst.fixture_count, idx);
+    }
+    // Standings: replace if new data available
+    if (src.standing_count > 0) {
+        dst.standing_count = src.standing_count;
+        for (int i = 0; i < src.standing_count; i++) dst.standings[i] = src.standings[i];
+    }
+    // Update metadata
+    if (src.current_round > 0) dst.current_round = src.current_round;
+
+    for (int i = 0; i < 40; i++) {
+        if (src.round_ids[i] > 0) dst.round_ids[i] = src.round_ids[i];
+    }
+    dst.last_updated = time(nullptr);
+}
+
 void MatchDB::updateTop14(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _top14 = d;
+    mergeCompetition(_top14, d);
     xSemaphoreGive(_mutex);
 }
 void MatchDB::updateProd2(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _prod2 = d;
+    mergeCompetition(_prod2, d);
     xSemaphoreGive(_mutex);
 }
 void MatchDB::updateCC(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    _cc = d;
+    mergeCompetition(_cc, d);
     xSemaphoreGive(_mutex);
 }
 
@@ -72,6 +127,7 @@ static void serializeMatch(JsonObject obj, const MatchData& m) {
     obj["sc_h"] = m.home_score; obj["sc_a"] = m.away_score;
     obj["st"] = (int)m.status; obj["min"] = m.minute;
     obj["ko"] = (long)m.kickoff_utc; obj["rnd"] = m.round;
+    obj["grp"] = m.group;
 }
 
 static void deserializeMatch(JsonObjectConst obj, MatchData& m) {
@@ -87,6 +143,7 @@ static void deserializeMatch(JsonObjectConst obj, MatchData& m) {
     m.minute      = obj["min"] | 0;
     m.kickoff_utc = obj["ko"]  | 0L;
     m.round       = obj["rnd"] | 0;
+    strlcpy(m.group, obj["grp"] | "", sizeof(m.group));
 }
 
 static void serializeStanding(JsonObject obj, const StandingEntry& s) {
@@ -117,7 +174,14 @@ static void serializeCompetition(JsonObject obj, const CompetitionData& d) {
     auto sa = obj["s"].to<JsonArray>();
     for (int i = 0; i < d.standing_count; i++) serializeStanding(sa.add<JsonObject>(), d.standings[i]);
     obj["rnd"] = d.current_round;
-    obj["ub"] = d.round_url_base;
+
+    auto rid = obj["rid"].to<JsonObject>();
+    for (int i = 0; i < 40; i++) {
+        if (d.round_ids[i] > 0) {
+            char k[4]; snprintf(k, sizeof(k), "%d", i);
+            rid[k] = d.round_ids[i];
+        }
+    }
 }
 
 static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
@@ -138,7 +202,12 @@ static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
         deserializeStanding(o, d.standings[d.standing_count++]);
     }
     d.current_round = obj["rnd"] | 0;
-    d.round_url_base = obj["ub"] | 0;
+
+    auto rid = obj["rid"].as<JsonObjectConst>();
+    for (JsonPairConst kv : rid) {
+        int round = atoi(kv.key().c_str());
+        if (round > 0 && round < 40) d.round_ids[round] = kv.value().as<uint32_t>();
+    }
 }
 
 void MatchDB::persist() {
@@ -162,4 +231,68 @@ void MatchDB::load() {
         deserializeCompetition(doc["cc"],  _cc);
     }
     f.close();
+}
+
+// ── Compact binary persistence for Champions Cup ─────────────────────────────
+
+void MatchDB::persistCCBinary(const CompetitionData& d) {
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    File f = LittleFS.open("/cc_data.bin", "w");
+    if (!f) { xSemaphoreGive(_mutex); return; }
+
+    uint32_t magic = 0x52474343; // "RGCC"
+    f.write((uint8_t*)&magic, 4);
+    uint8_t version = 1;
+    f.write(version);
+    f.write(d.result_count);
+    f.write(d.fixture_count);
+    f.write(d.current_round);
+
+    for (int i = 0; i < d.result_count && i < CompetitionData::MAX_MATCHES; i++) {
+        CCMatchRecord rec;
+        MatchRecord::fromMatchData(d.results[i], rec);
+        MatchRecord::writeRecord(f, rec);
+    }
+    for (int i = 0; i < d.fixture_count && i < CompetitionData::MAX_MATCHES; i++) {
+        CCMatchRecord rec;
+        MatchRecord::fromMatchData(d.fixtures[i], rec);
+        MatchRecord::writeRecord(f, rec);
+    }
+    f.close();
+    xSemaphoreGive(_mutex);
+}
+
+bool MatchDB::loadCCBinary(CompetitionData& d) {
+    File f = LittleFS.open("/cc_data.bin", "r");
+    if (!f) return false;
+
+    uint32_t magic = 0;
+    if (f.read((uint8_t*)&magic, 4) != 4 || magic != 0x52474343) {
+        f.close(); return false;
+    }
+    uint8_t version = f.read();
+    if (version != 1) { f.close(); return false; }
+
+    uint8_t result_count = f.read();
+    uint8_t fixture_count = f.read();
+    d.current_round = f.read();
+    d.result_count = 0;
+    d.fixture_count = 0;
+
+    for (int i = 0; i < result_count && i < CompetitionData::MAX_MATCHES; i++) {
+        CCMatchRecord rec;
+        if (!MatchRecord::readRecord(f, rec)) break;
+        uint8_t crc = MatchRecord::crc8((const uint8_t*)&rec, sizeof(rec) - 1);
+        if (crc != rec.crc8) continue;
+        MatchRecord::toMatchData(rec, d.results[d.result_count++]);
+    }
+    for (int i = 0; i < fixture_count && i < CompetitionData::MAX_MATCHES; i++) {
+        CCMatchRecord rec;
+        if (!MatchRecord::readRecord(f, rec)) break;
+        uint8_t crc = MatchRecord::crc8((const uint8_t*)&rec, sizeof(rec) - 1);
+        if (crc != rec.crc8) continue;
+        MatchRecord::toMatchData(rec, d.fixtures[d.fixture_count++]);
+    }
+    f.close();
+    return true;
 }
