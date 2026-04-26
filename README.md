@@ -202,4 +202,4 @@ MIT — voir [LICENSE](LICENSE).
 
 ---
 
-> 🏉 *Fait avec passion pour le rugby, par un fan du Stade Toulousain.*
+> 🏉 *UBB Fan*
