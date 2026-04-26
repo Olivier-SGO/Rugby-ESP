@@ -162,13 +162,18 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
         return false;
     }
 
-    uint8_t buf[1024];
+    uint8_t buf[4096];
     size_t written = 0;
-    unsigned long lastPrint = millis();
-    while (http.connected() || stream->available()) {
+    uint32_t lastData = millis();
+    uint32_t lastPrint = millis();
+    while (written < expectedSize) {
         size_t avail = stream->available();
         if (!avail) {
-            delay(1);
+            if (millis() - lastData > 30000) {
+                Serial.printf("[OTA] Read timeout at %zu / %zu bytes\n", written, expectedSize);
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(2));
             continue;
         }
         size_t toRead = min(avail, sizeof(buf));
@@ -182,12 +187,20 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
                 return false;
             }
             written += n;
+            lastData = millis();
             if (millis() - lastPrint > 5000) {
                 Serial.printf("[OTA] %s: %zu / %zu bytes\n",
                               command == U_FLASH ? "FW" : "FS", written, expectedSize);
                 lastPrint = millis();
             }
         }
+    }
+
+    if (written != expectedSize) {
+        snprintf(_lastError, sizeof(_lastError), "Incomplete download: %zu / %zu", written, expectedSize);
+        Update.abort();
+        http.end();
+        return false;
     }
 
     if (!Update.end()) {
