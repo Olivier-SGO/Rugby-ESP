@@ -45,6 +45,8 @@ bool OTAUpdater::checkForUpdate() {
     http.setTimeout(30000);
     http.begin(String(VERSION_URL));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+    const char* locKey = "Location";
+    http.collectHeaders(&locKey, 1);
     Serial.printf("[OTA] Checking GitHub for update... heap=%u max=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     int code = http.GET();
@@ -57,6 +59,7 @@ bool OTAUpdater::checkForUpdate() {
         http.end();
         http.begin(location);
         http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+        http.collectHeaders(&locKey, 1);
         code = http.GET();
         redirects++;
     }
@@ -124,6 +127,8 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     http.setTimeout(30000);
     http.begin(String(url));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+    const char* locKey = "Location";
+    http.collectHeaders(&locKey, 1);
     int code = http.GET();
 
     int redirects = 0;
@@ -133,6 +138,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
         http.end();
         http.begin(location);
         http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+        http.collectHeaders(&locKey, 1);
         code = http.GET();
         redirects++;
     }
