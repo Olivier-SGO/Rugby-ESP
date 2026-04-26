@@ -106,15 +106,16 @@ static void bootFetchTask(void*) {
     if (rendererHandle) vTaskSuspend(rendererHandle); // stop render allocs during fetch
     Fetcher.connectWiFi();
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
-    Fetcher.fetchAll();
 
-    // OTA auto-check FIRST — heap is still fresh before Idalgo fetches fragment it
+    // OTA auto-check FIRST — heap is fresh, before Idalgo fetches fragment it
     OTAUpdater::begin();
     if (OTAUpdater::getAutoUpdate() && WiFi.status() == WL_CONNECTED) {
         if (OTAUpdater::checkForUpdate()) {
             OTAUpdater::applyUpdate(); // restarts on success, never returns
         }
     }
+
+    Fetcher.fetchAll();
 
     s_bootFetchDone = true;
     if (rendererHandle) vTaskResume(rendererHandle);
