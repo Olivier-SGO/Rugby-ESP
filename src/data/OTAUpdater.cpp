@@ -43,12 +43,24 @@ bool OTAUpdater::checkForUpdate() {
 
     HTTPClient http;
     http.setTimeout(30000);
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.begin(String(VERSION_URL));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     Serial.printf("[OTA] Checking GitHub for update... heap=%u max=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     int code = http.GET();
+
+    // Manual redirect: end() destroys the TLS client, begin() creates a fresh one
+    int redirects = 0;
+    while ((code == 301 || code == 302 || code == 307 || code == 308) && redirects < 3) {
+        String location = http.header("Location");
+        Serial.printf("[OTA] Redirect %d -> %s\n", redirects + 1, location.c_str());
+        http.end();
+        http.begin(location);
+        http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+        code = http.GET();
+        redirects++;
+    }
+
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d", code);
         Serial.printf("[OTA] version.json failed: HTTP %d\n", code);
@@ -110,10 +122,21 @@ bool OTAUpdater::applyUpdate() {
 bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command) {
     HTTPClient http;
     http.setTimeout(30000);
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.begin(String(url));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     int code = http.GET();
+
+    int redirects = 0;
+    while ((code == 301 || code == 302 || code == 307 || code == 308) && redirects < 3) {
+        String location = http.header("Location");
+        Serial.printf("[OTA] Redirect %d -> %s\n", redirects + 1, location.c_str());
+        http.end();
+        http.begin(location);
+        http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+        code = http.GET();
+        redirects++;
+    }
+
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d on %s",
                  code, command == U_FLASH ? "firmware" : "littlefs");
