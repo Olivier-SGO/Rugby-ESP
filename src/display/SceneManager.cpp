@@ -71,6 +71,11 @@ void SceneManager::tick() {
         if (s == &_standScenes[i]) { animated = true; break; }
     }
 
+    // Rate-limit animated scenes to ~10fps to reduce tearing without double buffering
+    static uint32_t lastAnimatedRender = 0;
+    if (animated && millis() - lastAnimatedRender < 100) return;
+    if (animated) lastAnimatedRender = millis();
+
     if (_dirty || animated) {
         s->render();
         if (!animated) _dirty = false;
