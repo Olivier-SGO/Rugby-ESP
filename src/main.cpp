@@ -20,6 +20,7 @@
 #include "WiFiManager.h"
 #include "WebUI.h"
 #include "LogoCache.h"
+#include "OTAUpdater.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
 #include "fonts/AtkinsonHyperlegibleBold12pt7b.h"
 
@@ -106,6 +107,15 @@ static void bootFetchTask(void*) {
     Fetcher.connectWiFi();
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
     Fetcher.fetchAll();
+
+    // OTA auto-check — renderer already suspended, large stack on Core 0
+    OTAUpdater::begin();
+    if (OTAUpdater::getAutoUpdate() && WiFi.status() == WL_CONNECTED) {
+        if (OTAUpdater::checkForUpdate()) {
+            OTAUpdater::applyUpdate(); // restarts on success, never returns
+        }
+    }
+
     s_bootFetchDone = true;
     if (rendererHandle) vTaskResume(rendererHandle);
     vTaskDelete(nullptr);

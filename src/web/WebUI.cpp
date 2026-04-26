@@ -2,11 +2,13 @@
 #include "DisplayPrefs.h"
 #include "WiFiManager.h"
 #include "MatchRecord.h"
+#include "OTAUpdater.h"
 #include <WebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <Update.h>
 #include <Arduino.h>
 
 static WebServer server(80);
@@ -220,6 +222,64 @@ void WebUI::begin(MatchDB* db) {
         serializeJson(doc, out);
         server.send(200, "application/json", out);
     });
+
+    // ── OTA update endpoints ─────────────────────────────────────────────────
+    server.on("/update/status", HTTP_GET, []() {
+        JsonDocument doc;
+        doc["current"] = FIRMWARE_VERSION;
+        doc["available"] = OTAUpdater::isUpdateAvailable();
+        doc["remote"] = OTAUpdater::getRemoteVersion();
+        doc["auto_update"] = OTAUpdater::getAutoUpdate();
+        doc["error"] = OTAUpdater::getLastError();
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    server.on("/update/auto", HTTP_POST, []() {
+        JsonDocument doc;
+        if (deserializeJson(doc, server.arg("plain")) == DeserializationError::Ok && doc["enabled"].is<bool>()) {
+            OTAUpdater::setAutoUpdate(doc["enabled"]);
+        }
+        server.send(200, "application/json", "{\"ok\":true}");
+    });
+
+    server.on("/update/apply", HTTP_POST, []() {
+        server.send(200, "application/json", "{\"ok\":true,\"msg\":\"Updating and restarting...\"}");
+        delay(500);
+        OTAUpdater::applyUpdate();          // restarts on success
+        server.send(500, "application/json", "{\"error\":true,\"msg\":\"Update failed\"}");
+    });
+
+    // Manual upload helpers
+    auto handleUpload = [](int command, const char* label) {
+        HTTPUpload& upload = server.upload();
+        if (upload.status == UPLOAD_FILE_START) {
+            Serial.printf("OTA %s: %s (%u bytes)\n", label, upload.filename.c_str(), upload.totalSize);
+            if (!Update.begin(upload.totalSize, command)) {
+                Serial.printf("Update.begin failed: %s\n", Update.errorString());
+            }
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                Serial.printf("Update.write failed\n");
+            }
+        } else if (upload.status == UPLOAD_FILE_END) {
+            if (!Update.end(true)) {
+                Serial.printf("Update.end failed: %s\n", Update.errorString());
+            } else {
+                Serial.printf("OTA %s success\n", label);
+            }
+        }
+    };
+
+    server.on("/update/firmware", HTTP_POST,
+        []() { server.send(200, "application/json", Update.hasError() ? "{\"error\":true}" : "{\"ok\":true}"); },
+        [&]() { handleUpload(U_FLASH, "firmware"); }
+    );
+
+    server.on("/update/littlefs", HTTP_POST,
+        []() { server.send(200, "application/json", Update.hasError() ? "{\"error\":true}" : "{\"ok\":true}"); },
+        [&]() { handleUpload(U_SPIFFS, "littlefs"); }
+    );
 
     server.begin();
     Serial.printf("Web UI at http://%s\n", WiFi.localIP().toString().c_str());

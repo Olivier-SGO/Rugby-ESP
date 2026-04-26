@@ -110,6 +110,32 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
 <button class="btn-primary" onclick="addWifiRow()" style="margin-top:8px">+ Ajouter un reseau</button>
 <button class="btn-primary" onclick="saveWifi()">Sauvegarder les reseaux</button>
 
+<h2>Mise a jour</h2>
+<div style="background:#1a1a1a;border-radius:8px;padding:12px;margin:8px 0">
+  <div class="row" style="justify-content:space-between">
+    <label style="font-size:14px;color:#bbb">Mise a jour automatique</label>
+    <input type="checkbox" id="auto-update" onchange="setAutoUpdate()">
+  </div>
+  <div style="font-size:12px;color:#888;margin:4px 0">
+    Version actuelle: <span id="ota-current">-</span><br>
+    Version distante: <span id="ota-remote">-</span>
+  </div>
+  <div id="ota-error" style="font-size:12px;color:#c33;margin:4px 0"></div>
+  <button class="btn-primary" onclick="checkUpdate()" style="margin-top:8px">Verifier les mises a jour</button>
+  <button class="btn-danger" id="btn-apply" onclick="applyUpdate()" style="display:none;margin-top:8px">Mettre a jour et redemarrer</button>
+
+  <hr style="border:0;border-top:1px solid #333;margin:12px 0">
+  <div style="font-size:12px;color:#888;margin-bottom:8px">Flash manuel (selectionnez un fichier .bin)</div>
+  <form action="/update/firmware" method="POST" enctype="multipart/form-data" style="margin:4px 0">
+    <input type="file" name="update" accept=".bin" style="font-size:12px;color:#eee">
+    <button type="submit" class="btn-primary" style="margin-top:4px">Flasher firmware</button>
+  </form>
+  <form action="/update/littlefs" method="POST" enctype="multipart/form-data" style="margin:4px 0">
+    <input type="file" name="update" accept=".bin" style="font-size:12px;color:#eee">
+    <button type="submit" class="btn-primary" style="margin-top:4px">Flasher LittleFS</button>
+  </form>
+</div>
+
 <h2>Controles</h2>
 <button class="btn-primary" onclick="nextScene()">Scene suivante</button>
 <button class="btn-danger"  onclick="doRestart()">Redemarrer</button>
@@ -285,6 +311,43 @@ async function doRestart() {
     await fetch('/restart', {method:'POST'});
 }
 
+// ---- OTA update ----
+async function loadUpdateStatus() {
+  try {
+    const r = await fetch('/update/status');
+    const d = await r.json();
+    document.getElementById('ota-current').textContent = d.current;
+    document.getElementById('ota-remote').textContent = d.available ? d.remote : 'A jour';
+    document.getElementById('ota-error').textContent = d.error || '';
+    document.getElementById('btn-apply').style.display = d.available ? 'block' : 'none';
+    cb('auto-update').checked = d.auto_update;
+  } catch(e) { console.error('loadUpdateStatus', e); }
+}
+
+async function setAutoUpdate() {
+  const enabled = cb('auto-update').checked;
+  await fetch('/update/auto', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({enabled})
+  });
+}
+
+async function checkUpdate() {
+  const btn = document.querySelector('button[onclick="checkUpdate()"]');
+  btn.textContent = 'Verification...';
+  btn.disabled = true;
+  await loadUpdateStatus();
+  btn.textContent = 'Verifier les mises a jour';
+  btn.disabled = false;
+}
+
+async function applyUpdate() {
+  if (!confirm('Mettre a jour et redemarrer le display ?')) return;
+  await fetch('/update/apply', {method:'POST'});
+  alert('Mise a jour en cours... Le display va redemarrer.');
+}
+
 // ---- WiFi networks editor ----
 let wifiNetworks = [];
 
@@ -358,7 +421,9 @@ function escapeHtml(s) {
 loadStatus();
 loadPrefs();
 loadWifi();
+loadUpdateStatus();
 setInterval(loadStatus, 15000);
+setInterval(loadUpdateStatus, 60000);
 </script>
 </body>
 </html>

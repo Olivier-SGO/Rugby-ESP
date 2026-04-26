@@ -14,6 +14,7 @@ struct DisplayPrefs {
     uint16_t  score_s    = 8;
     uint16_t  fixture_s  = 8;
     uint16_t  standing_s = 20;
+    bool      auto_update = false;
 };
 
 inline void loadDisplayPrefs(DisplayPrefs& p) {
@@ -30,6 +31,7 @@ inline void loadDisplayPrefs(DisplayPrefs& p) {
     p.score_s    = prefs.getUShort("sc_s", 8);
     p.fixture_s  = prefs.getUShort("fx_s", 8);
     p.standing_s = prefs.getUShort("st_s", 20);
+    p.auto_update = prefs.getBool("auto_update", false);
     prefs.end();
 }
 
@@ -47,5 +49,6 @@ inline void saveDisplayPrefs(const DisplayPrefs& p) {
     prefs.putUShort("sc_s", p.score_s);
     prefs.putUShort("fx_s", p.fixture_s);
     prefs.putUShort("st_s", p.standing_s);
+    prefs.putBool("auto_update", p.auto_update);
     prefs.end();
 }
