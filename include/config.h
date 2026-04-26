@@ -7,7 +7,7 @@
 //  Validated: boot fetch 3 comps, HTML entities decode, div_idalgo delimiter,
 //             full-page parse (PSRAM), Web UI, LittleFS, logos, standings
 // ═════════════════════════════════════════════════════════════════════════════
-#define FIRMWARE_VERSION "1.1.8"
+#define FIRMWARE_VERSION "1.1.7"
 
 // ── Display ──────────────────────────────────────────────────────────────────
 #define PANEL_W       128
