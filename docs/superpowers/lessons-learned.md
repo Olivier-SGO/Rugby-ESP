@@ -163,6 +163,157 @@ if (blockEnd) blockEnd += 5;
 
 ---
 
+## 12. OTA check must run BEFORE Idalgo fetches
+
+**Symptôme** : L'ESP ne détecte jamais les mises à jour GitHub. `OTAUpdater::checkForUpdate()` retourne HTTP -1 ou HTTP -5.
+
+**Cause** : `Fetcher.fetchAll()` fait 3 handshakes TLS + alloue des buffers de 300-400KB. Le heap devient fragmenté (`max` chute de ~55K à ~20K). Quand le check OTA arrive ensuite, il n'y a plus assez de SRAM contiguë pour un 4ème handshake TLS vers GitHub.
+
+**Solution** : `OTAUpdater::checkForUpdate()` doit s'exécuter **avant** `Fetcher.fetchAll()` dans `bootFetchTask`, quand le heap est encore frais.
+
+**Code** :
+```cpp
+// CORRECT
+OTAUpdater::checkForUpdate();  // heap fresh → TLS OK
+Fetcher.fetchAll();            // then fragment away
+
+// ERREUR
+Fetcher.fetchAll();            // fragmente le heap
+OTAUpdater::checkForUpdate();  // HTTP -1, pas assez de heap
+```
+
+---
+
+## 13. `readEntireStream` without timeout → infinite loop
+
+**Symptôme** : Le boot fetch bloque indéfiniment après `Idalgo: connecting ...`. Le log n'avance plus. Hard reset nécessaire.
+
+**Cause** : `while (http.connected() || stream->available()) { if (!stream->available()) { delay(5); continue; } }`. Si le serveur garde la connexion TCP ouverte sans envoyer de données (ou si `connected()` retourne `true` indéfiniment), la boucle tourne en permanence.
+
+**Solution** : Timeout de 30 secondes sans données reçues :
+```cpp
+unsigned long lastData = millis();
+while (http.connected() || stream->available()) {
+    if (!stream->available()) {
+        if (millis() - lastData > 30000) break;
+        delay(5); continue;
+    }
+    // ... read ...
+    if (rd > 0) lastData = millis();
+}
+```
+
+---
+
+## 14. `HTTPClient` timeout ≠ `WiFiClient::setTimeout()`
+
+**Piège** : `WiFiClient::setTimeout(15)` = 15 **secondes**. `HTTPClient::setTimeout(15000)` = 15 **millisecondes** (défaut).
+
+**Cause** : `HTTPClient` a son propre timeout interne en millisecondes, indépendant du `WiFiClient`. Le défaut est 5000ms. Pour des pages de 300KB+, augmenter à 30000ms.
+
+**Solution** :
+```cpp
+client->setTimeout(15);          // WiFiClient read timeout = 15s
+http.setTimeout(30000);          // HTTPClient total timeout = 30s
+```
+
+---
+
+## 15. DataFetcher periodic task fetches immediately after boot
+
+**Symptôme** : Deux fetches quasi-simultanés au boot. Le deuxième échoue systématiquement (heap fragmenté).
+
+**Cause** : `DataFetcher::taskFunc` initialisait `_lastIdalgo = 0`. Dans `loop()`, `now - _lastIdalgo > pollMs || _lastIdalgo == 0` est vrai immédiatement au démarrage de la tâche.
+
+**Solution** : Initialiser `_lastIdalgo = millis()` dans `taskFunc` pour respecter le délai `pollMs`.
+
+---
+
+## 16. Stale "live" matches block scene rotation forever
+
+**Symptôme** : L'affichage reste figé sur un seul match. Pas de rotation des scènes. `_livePriority` est activé.
+
+**Cause** : `mergeCompetition` met à jour les matchs existants mais ne **supprime** jamais les anciens. Un match marqué `Live` dans le cache reste `Live` éternellement s'il disparaît des nouvelles données parsées. `SceneManager::tick()` bloque `nextScene()` pendant `LIVE_GRACE_MS` (5 min) à chaque détection.
+
+**Solution** : Dans `MatchDB::liveMask()`, ignorer les matchs `Live` dont le kickoff date de plus de 4 heures.
+
+---
+
+## 17. NVS preferences silently disable competitions
+
+**Symptôme** : Seulement 8 slots affichés (Top14 seul) alors que les données parsées contiennent 26 matchs sur 3 compétitions.
+
+**Cause** : L'utilisateur (ou un bug passé) a désactivé ProD2 et/ou CC dans la Web UI. Les préférences sont persistées en NVS et survivent aux reflashes. Les valeurs par défaut `true` ne s'appliquent que si la clé n'existe pas encore.
+
+**Solution** : Loguer les préférences lues dans `rebuildSlots()` pour le diagnostic :
+```cpp
+Serial.printf("Prefs: T14 en=%d sc=%d ..., PD2 en=%d ..., CC en=%d ...\n", ...);
+```
+
+---
+
+## 18. `ESP.restart()` inside HTTP handler is unstable
+
+**Symptôme** : Le bouton "Redémarrer" dans la Web UI ne redémarre pas l'ESP. La connexion TCP est coupée brutalement, parfois le reboot ne se produit pas.
+
+**Cause** : `ESP.restart()` appelé directement dans une callback `server.on(...)` du `WebServer` Arduino. La réponse HTTP n'est pas flushée, et le contexte d'interruption peut corrompre le reboot.
+
+**Solution** : Flag différé + reboot dans `loop()` :
+```cpp
+// Handler
+server.on("/restart", HTTP_POST, [this]() {
+    server.send(200, "text/plain", "Restarting...");
+    _restartPending = true;
+});
+
+// loop()
+if (Web.shouldRestart()) { delay(500); ESP.restart(); }
+```
+
+---
+
+## 19. Lambda capture `[]` vs `[&]` in `server.on()` upload handlers
+
+**Symptôme** : Compilation échoue avec `'handleUpload' is not captured`.
+
+**Cause** : Le 4ème argument de `server.on()` (upload handler) est un lambda sans capture `[]`. Il ne voit pas les variables locales du scope englobant.
+
+**Solution** : Capturer par référence `[&]` :
+```cpp
+server.on("/update/firmware", HTTP_POST,
+    []() { /* final handler */ },
+    [&]() { handleUpload(U_FLASH, "firmware"); }  // ← [&] ici
+);
+```
+
+---
+
+## 20. `Stream::connected()` does not exist
+
+**Symptôme** : Compilation échoue avec `'class Stream' has no member named 'connected'`.
+
+**Cause** : `connected()` est une méthode de `Client`, pas de `Stream`. `WiFiClient` hérite des deux, mais `Stream` seul ne l'a pas.
+
+**Solution** : Ne pas appeler `stream.connected()` sur un `Stream&`. Utiliser `expectedSize` fixe et lire jusqu'à `written >= expectedSize`.
+
+---
+
+## 21. GitHub `gh release create` auto-creates the tag
+
+**Astuce** : `gh release create v1.2.3` crée automatiquement le tag Git `v1.2.3` sur le commit courant si le tag n'existe pas. Pas besoin de `git tag` préalable.
+
+---
+
+## 22. OTA manual check timeout too short → HTTP -5
+
+**Symptôme** : Dans la Web UI, "Vérifier les mises à jour" retourne `HTTP -5` (connection lost / read timeout).
+
+**Cause** : `OTAUpdater::checkForUpdate()` utilisait `http.setTimeout(15000)` (15s). Le handshake TLS vers GitHub + téléchargement de `version.json` pouvait dépasser ce délai sur une connexion lente ou un heap fragmenté.
+
+**Solution** : `http.setTimeout(30000)` (30s), identique aux fetches Idalgo.
+
+---
+
 ## Checklist avant chaque flash hardware
 
 1. Build : `pio run -e matrixportal_s3`

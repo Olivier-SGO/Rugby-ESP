@@ -49,11 +49,13 @@ bool OTAUpdater::checkForUpdate() {
     client->setInsecure();
 
     HTTPClient http;
-    http.setTimeout(15000);
+    http.setTimeout(30000);
     http.begin(*client, VERSION_URL);
+    Serial.println("[OTA] Checking GitHub for update...");
     int code = http.GET();
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d", code);
+        Serial.printf("[OTA] version.json failed: HTTP %d\n", code);
         http.end();
         delete client;
         return false;
