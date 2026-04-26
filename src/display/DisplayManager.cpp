@@ -11,7 +11,7 @@ bool DisplayManager::begin() {
     cfg.gpio.a   = HUB75_A;   cfg.gpio.b   = HUB75_B;   cfg.gpio.c   = HUB75_C;
     cfg.gpio.d   = HUB75_D;   cfg.gpio.e   = HUB75_E;
     cfg.gpio.lat = HUB75_LAT; cfg.gpio.oe  = HUB75_OE;  cfg.gpio.clk = HUB75_CLK;
-    cfg.double_buff = false;
+    cfg.double_buff = true;
     cfg.clkphase = false;
 
     _panel = new MatrixPanel_I2S_DMA(cfg);

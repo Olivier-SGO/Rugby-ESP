@@ -106,13 +106,15 @@ bool OTAUpdater::applyUpdate() {
         return false;
     }
 
+    // Brief pause between firmware and filesystem flash to let Update subsystem settle
+    delay(500);
+
     if (_littlefsURL[0] && _littlefsSize) {
         Serial.println("[OTA] Flashing LittleFS...");
         if (!_flashFromURL(_littlefsURL, _littlefsSize, U_SPIFFS)) {
             // Firmware was flashed OK but filesystem failed. Reboot anyway —
             // old filesystem will work with the new firmware.
-            strlcpy(_lastError, "FS flash failed, rebooting with new FW", sizeof(_lastError));
-            Serial.println(_lastError);
+            Serial.printf("[OTA] FS error: %s\n", _lastError);
         }
     }
 
@@ -146,6 +148,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d on %s",
                  code, command == U_FLASH ? "firmware" : "littlefs");
+        Serial.printf("[OTA] %s\n", _lastError);
         http.end();
         return false;
     }
@@ -156,8 +159,11 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     }
 
     WiFiClient* stream = http.getStreamPtr();
+    Serial.printf("[OTA] Update.begin(%s) heap=%u\n",
+                  command == U_FLASH ? "FW" : "FS", ESP.getFreeHeap());
     if (!Update.begin(expectedSize, command)) {
         snprintf(_lastError, sizeof(_lastError), "Update.begin failed: %s", Update.errorString());
+        Serial.printf("[OTA] %s\n", _lastError);
         http.end();
         return false;
     }
@@ -198,6 +204,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
 
     if (written != expectedSize) {
         snprintf(_lastError, sizeof(_lastError), "Incomplete download: %zu / %zu", written, expectedSize);
+        Serial.printf("[OTA] %s\n", _lastError);
         Update.abort();
         http.end();
         return false;
@@ -205,6 +212,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
 
     if (!Update.end()) {
         snprintf(_lastError, sizeof(_lastError), "Update.end failed: %s", Update.errorString());
+        Serial.printf("[OTA] %s\n", _lastError);
         http.end();
         return false;
     }
