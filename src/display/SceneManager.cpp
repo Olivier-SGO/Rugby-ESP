@@ -1,7 +1,9 @@
 #include "SceneManager.h"
 #include "CompLogos.h"
 #include "DisplayPrefs.h"
+#include "DisplayManager.h"
 #include "config.h"
+#include "fonts/AtkinsonHyperlegible8pt7b.h"
 #include <Arduino.h>
 
 SceneManager Scenes;
@@ -19,7 +21,28 @@ void SceneManager::tick() {
         _needsRebuild = false;
         rebuildSlots();
     }
-    if (_slotCount == 0) { rebuildSlots(); return; }
+    if (_slotCount == 0) {
+        static uint32_t lastEmptyRebuild = 0;
+        static uint32_t lastEmptyRender = 0;
+        if (millis() - lastEmptyRebuild > 5000) {
+            lastEmptyRebuild = millis();
+            rebuildSlots();
+        }
+        if (millis() - lastEmptyRender > 1000) {
+            lastEmptyRender = millis();
+            Display.fillScreen(C_BLACK);
+            const GFXfont* f8 = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+            const char* msg1 = "EN ATTENTE";
+            const char* msg2 = "DE DONNEES";
+            int16_t x1, y1; uint16_t tw, th;
+            Display.getTextBounds(msg1, 0, 0, &x1, &y1, &tw, &th, f8);
+            Display.drawTextRelief(CENTER_MID - tw/2, 22, msg1, C_GOLD, f8);
+            Display.getTextBounds(msg2, 0, 0, &x1, &y1, &tw, &th, f8);
+            Display.drawTextRelief(CENTER_MID - tw/2, 40, msg2, C_GOLD, f8);
+            Display.flip();
+        }
+        return;
+    }
 
     if (_db->hasLive()) {
         _livePriority = true;
