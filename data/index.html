@@ -42,6 +42,10 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
 </div>
 
 <div id="main-ui">
+<h2>Controles</h2>
+<button class="btn-primary" onclick="nextScene()">Scene suivante</button>
+<button class="btn-danger"  onclick="doRestart()">Redemarrer</button>
+
 <h2>Luminosite</h2>
 <div class="row">
   <input type="range" id="bright" min="10" max="255" value="80" oninput="onBright(this.value)">
@@ -136,9 +140,6 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
   </form>
 </div>
 
-<h2>Controles</h2>
-<button class="btn-primary" onclick="nextScene()">Scene suivante</button>
-<button class="btn-danger"  onclick="doRestart()">Redemarrer</button>
 </div><!-- /main-ui -->
 
 <script>
