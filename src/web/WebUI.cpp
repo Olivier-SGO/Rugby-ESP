@@ -260,10 +260,15 @@ void WebUI::begin(MatchDB* db) {
     });
 
     server.on("/update/apply", HTTP_POST, []() {
+        extern TaskHandle_t rendererHandle;
+        if (rendererHandle) vTaskSuspend(rendererHandle);
         server.send(200, "application/json", "{\"ok\":true,\"msg\":\"Updating and restarting...\"}");
         delay(500);
-        OTAUpdater::applyUpdate();          // restarts on success
-        server.send(500, "application/json", "{\"error\":true,\"msg\":\"Update failed\"}");
+        bool ok = OTAUpdater::applyUpdate(); // restarts on success
+        if (rendererHandle) vTaskResume(rendererHandle);
+        if (!ok) {
+            server.send(500, "application/json", "{\"error\":true,\"msg\":\"Update failed\"}");
+        }
     });
 
     // Manual upload helpers

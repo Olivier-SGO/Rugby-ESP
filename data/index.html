@@ -356,8 +356,14 @@ async function checkUpdate() {
 
 async function applyUpdate() {
   if (!confirm('Mettre a jour et redemarrer le display ?')) return;
-  await fetch('/update/apply', {method:'POST'});
-  alert('Mise a jour en cours... Le display va redemarrer.');
+  const status = document.getElementById('ota-error');
+  status.textContent = 'Mise a jour en cours... Le display va redemarrer.';
+  status.style.color = '#4a4';
+  try {
+    await fetch('/update/apply', {method:'POST'});
+  } catch(e) {
+    // Connection dropped by ESP restart — expected
+  }
 }
 
 // ---- WiFi networks editor ----
