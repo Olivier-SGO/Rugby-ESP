@@ -67,24 +67,54 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
     char* buf = (char*)malloc(cap);
     if (!buf) return nullptr;
     size_t len = 0;
-    unsigned long lastData = millis();
-    while (http.connected() || stream->available()) {
-        if (!stream->available()) {
-            if (millis() - lastData > 30000) break; // 30s read timeout
-            delay(5);
-            continue;
+    uint32_t lastData = millis();
+
+    int expectedSize = http.getSize();
+    if (expectedSize > 0) {
+        // Known size: read exactly expectedSize bytes (WiFiClientSecure
+        // connected() can false-negative when buffer is empty)
+        while (len < (size_t)expectedSize) {
+            int avail = stream->available();
+            if (!avail) {
+                if (millis() - lastData > 30000) {
+                    Serial.printf("readEntireStream: timeout at %zu / %d bytes\n", len, expectedSize);
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(2));
+                continue;
+            }
+            if (len + avail + 1 > cap) {
+                while (cap < len + avail + 1) cap *= 2;
+                char* nb = (char*)realloc(buf, cap);
+                if (!nb) { free(buf); return nullptr; }
+                buf = nb;
+            }
+            int rd = stream->readBytes(buf + len, avail);
+            len += rd;
+            if (rd > 0) lastData = millis();
+            if (len > 600000) break;
         }
-        int avail = stream->available();
-        if (len + avail + 1 > cap) {
-            while (cap < len + avail + 1) cap *= 2;
-            char* nb = (char*)realloc(buf, cap);
-            if (!nb) { free(buf); return nullptr; }
-            buf = nb;
+    } else {
+        // Unknown size: timeout-based loop
+        while (true) {
+            int avail = stream->available();
+            if (!avail) {
+                if (millis() - lastData > 30000) break;
+                if (!http.connected() && !stream->available()) break;
+                vTaskDelay(pdMS_TO_TICKS(2));
+                continue;
+            }
+            if (len + avail + 1 > cap) {
+                while (cap < len + avail + 1) cap *= 2;
+                char* nb = (char*)realloc(buf, cap);
+                if (!nb) { free(buf); return nullptr; }
+                buf = nb;
+            }
+            int rd = stream->readBytes(buf + len, avail);
+            len += rd;
+            if (rd > 0) lastData = millis();
+            if (len > 600000) break;
         }
-        int rd = stream->readBytes(buf + len, avail);
-        len += rd;
-        if (rd > 0) lastData = millis();
-        if (len > 600000) break; // safety
     }
     buf[len] = '\0';
     outLen = len;
@@ -96,7 +126,6 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     HTTPClient http;
     WiFiClientSecure* client = new WiFiClientSecure;
     client->setInsecure();
-    client->setTimeout(15);
 
     http.begin(*client, url);
     http.setTimeout(30000);
@@ -419,7 +448,6 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     HTTPClient http;
     WiFiClientSecure* client = new WiFiClientSecure;
     client->setInsecure();
-    client->setTimeout(15);
 
     http.begin(*client, url);
     http.setTimeout(30000);
