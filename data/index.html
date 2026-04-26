@@ -338,6 +338,9 @@ async function checkUpdate() {
   const btn = document.querySelector('button[onclick="checkUpdate()"]');
   btn.textContent = 'Verification...';
   btn.disabled = true;
+  try {
+    await fetch('/update/check', {method: 'POST'});
+  } catch(e) { console.error('checkUpdate', e); }
   await loadUpdateStatus();
   btn.textContent = 'Verifier les mises a jour';
   btn.disabled = false;

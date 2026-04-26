@@ -16,6 +16,7 @@ void DataFetcher::taskFunc(void* param) {
     DataFetcher* self = static_cast<DataFetcher*>(param);
     if (WiFi.status() != WL_CONNECTED) self->connectWiFi();
     if (!self->_timeSynced) self->syncNTP();
+    self->_lastIdalgo = millis();  // don't fetch immediately — boot fetch just finished
     for (;;) {
         self->loop();
         vTaskDelay(pdMS_TO_TICKS(5000));
@@ -113,23 +114,24 @@ void DataFetcher::fetchAll() {
     const char* top14Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats";
     const char* prod2Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats";
 
-    Serial.printf("FetchAll: heap=%u max=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    // CC first — needs the most contiguous heap for TLS handshake
+    Serial.printf("FetchAll: heap=%u max=%u (before CC)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    fetchCC(idalgo, cc);
+    _db->updateCC(cc);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+
+    Serial.printf("FetchAll: heap=%u max=%u (before Top14)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     if (idalgo.fetch(top14Base, top14)) {
         fetchNextJournee(top14, top14Base, idalgo);
         _db->updateTop14(top14);
     }
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
-    Serial.printf("FetchAll: heap=%u max=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf("FetchAll: heap=%u max=%u (before ProD2)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     if (idalgo.fetch(prod2Base, prod2)) {
         fetchNextJournee(prod2, prod2Base, idalgo);
         _db->updateProd2(prod2);
     }
-    vTaskDelay(pdMS_TO_TICKS(3000));
-
-    Serial.printf("FetchAll: heap=%u max=%u (before CC)\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    fetchCC(idalgo, cc);
-    _db->updateCC(cc);
 
     _firstFetchDone = true;
     _db->persist();

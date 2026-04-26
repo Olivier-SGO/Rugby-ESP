@@ -67,8 +67,13 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
     char* buf = (char*)malloc(cap);
     if (!buf) return nullptr;
     size_t len = 0;
+    unsigned long lastData = millis();
     while (http.connected() || stream->available()) {
-        if (!stream->available()) { delay(5); continue; }
+        if (!stream->available()) {
+            if (millis() - lastData > 30000) break; // 30s read timeout
+            delay(5);
+            continue;
+        }
         int avail = stream->available();
         if (len + avail + 1 > cap) {
             while (cap < len + avail + 1) cap *= 2;
@@ -78,6 +83,7 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
         }
         int rd = stream->readBytes(buf + len, avail);
         len += rd;
+        if (rd > 0) lastData = millis();
         if (len > 600000) break; // safety
     }
     buf[len] = '\0';
@@ -93,6 +99,7 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     client->setTimeout(15);
 
     http.begin(*client, url);
+    http.setTimeout(30000);
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
     http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
     http.addHeader("Accept-Encoding", "identity");
@@ -106,6 +113,9 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
         return false;
     }
 
+    String enc = http.header("Content-Encoding");
+    Serial.printf("Idalgo: HTTP 200, Content-Encoding=%s\n", enc.c_str());
+
     WiFiClient* stream = http.getStreamPtr();
     size_t totalLen = 0;
     char* page = readEntireStream(stream, http, totalLen);
@@ -116,6 +126,10 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     }
 
     Serial.printf("Idalgo: %u bytes total, parsing...\n", totalLen);
+    // Debug: show first 200 chars to detect gzip or error page
+    char dbg[201];
+    strlcpy(dbg, page, sizeof(dbg));
+    Serial.printf("Idalgo: start=%s\n", dbg);
     parseChunk(page, totalLen, out, true);
     free(page);
 
@@ -178,6 +192,15 @@ int IdalgoParser::parseChunk(const char* chunk, size_t len,
         }
         pos = blockEnd;
     }
+
+    // current_round must come from actually parsed matches, not nav links
+    uint8_t maxRound = 0;
+    for (int i = 0; i < out.result_count; i++)
+        if (out.results[i].round > maxRound) maxRound = out.results[i].round;
+    for (int i = 0; i < out.fixture_count; i++)
+        if (out.fixtures[i].round > maxRound) maxRound = out.fixtures[i].round;
+    if (maxRound > 0) out.current_round = maxRound;
+
     return found;
 }
 
@@ -194,7 +217,6 @@ void IdalgoParser::extractRoundLinks(const char* chunk, size_t len, CompetitionD
             int round = atoi(numEnd + 9);
             if (round > 0 && round < 40) {
                 out.round_ids[round] = (uint32_t)id;
-                if (round > out.current_round) out.current_round = round;
             }
             p = numEnd + 9;
         } else {
@@ -400,6 +422,7 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     client->setTimeout(15);
 
     http.begin(*client, url);
+    http.setTimeout(30000);
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
     http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
     http.addHeader("Accept-Encoding", "identity");
@@ -414,6 +437,9 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
         return false;
     }
 
+    String enc = http.header("Content-Encoding");
+    Serial.printf("IdalgoCalendar: HTTP 200, Content-Encoding=%s\n", enc.c_str());
+
     WiFiClient* stream = http.getStreamPtr();
     size_t totalLen = 0;
     char* page = readEntireStream(stream, http, totalLen);
@@ -425,6 +451,9 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     }
 
     Serial.printf("IdalgoCalendar: %u bytes total, parsing...\n", totalLen);
+    char dbg[201];
+    strlcpy(dbg, page, sizeof(dbg));
+    Serial.printf("IdalgoCalendar: start=%s\n", dbg);
     parseCalendarChunk(page, totalLen, temp, tempCount, TEMP_MAX, true);
     free(page);
 

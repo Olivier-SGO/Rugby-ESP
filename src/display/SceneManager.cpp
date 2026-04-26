@@ -84,6 +84,10 @@ void SceneManager::rebuildSlots() {
 
     DisplayPrefs prefs;
     loadDisplayPrefs(prefs);
+    Serial.printf("Prefs: T14 en=%d sc=%d fx=%d st=%d, PD2 en=%d sc=%d fx=%d st=%d, CC en=%d sc=%d fx=%d st=%d\n",
+                  prefs.comp[0].enabled, prefs.comp[0].scores, prefs.comp[0].fixtures, prefs.comp[0].standings,
+                  prefs.comp[1].enabled, prefs.comp[1].scores, prefs.comp[1].fixtures, prefs.comp[1].standings,
+                  prefs.comp[2].enabled, prefs.comp[2].scores, prefs.comp[2].fixtures, prefs.comp[2].standings);
 
     struct CompInfo { const char* name; uint16_t color; uint8_t playoff; uint8_t relStart; };
     CompInfo comps[] = {
@@ -176,6 +180,12 @@ void SceneManager::rebuildSlots() {
     if (pd2) { addComp(pd2, 1); _db->release(); }
     const CompetitionData* cc  = _db->acquireCC();
     if (cc)  { addComp(cc,  2); _db->release(); }
+
+    int t14r = t14 ? t14->result_count : -1, t14f = t14 ? t14->fixture_count : -1;
+    int pd2r = pd2 ? pd2->result_count : -1, pd2f = pd2 ? pd2->fixture_count : -1;
+    int ccr  = cc  ? cc->result_count  : -1, ccf  = cc  ? cc->fixture_count  : -1;
+    Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d)\n",
+                  _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf);
 
     if (_slotCount == 0) return;
     if (_current >= _slotCount) _current = 0;

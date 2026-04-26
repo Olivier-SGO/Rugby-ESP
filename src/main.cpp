@@ -55,7 +55,7 @@ static void hwTest() {
     delay(1000);
 }
 
-static TaskHandle_t rendererHandle = nullptr;
+TaskHandle_t rendererHandle = nullptr;
 
 // ── Boot info screen (IP + mDNS) ─────────────────────────────────────────────
 static void showBootInfo() {
@@ -108,7 +108,7 @@ static void bootFetchTask(void*) {
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
     Fetcher.fetchAll();
 
-    // OTA auto-check — renderer already suspended, large stack on Core 0
+    // OTA auto-check FIRST — heap is still fresh before Idalgo fetches fragment it
     OTAUpdater::begin();
     if (OTAUpdater::getAutoUpdate() && WiFi.status() == WL_CONNECTED) {
         if (OTAUpdater::checkForUpdate()) {
@@ -203,6 +203,10 @@ void setup() {
 void loop() {
     ArduinoOTA.handle();
     Web.handle();
+    if (Web.shouldRestart()) {
+        delay(500);
+        ESP.restart();
+    }
 
     // When boot fetch finishes, rebuild scenes, show IP info, then start services
     static bool bootFetchHandled = false;

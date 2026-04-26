@@ -11,6 +11,8 @@
 #include <Update.h>
 #include <Arduino.h>
 
+extern TaskHandle_t rendererHandle;
+
 static WebServer server(80);
 WebUI Web;
 
@@ -73,10 +75,9 @@ void WebUI::begin(MatchDB* db) {
     });
 
     // POST /restart
-    server.on("/restart", HTTP_POST, []() {
+    server.on("/restart", HTTP_POST, [this]() {
         server.send(200, "text/plain", "Restarting...");
-        delay(500);
-        ESP.restart();
+        _restartPending = true;
     });
 
     // GET /next-scene
@@ -230,6 +231,21 @@ void WebUI::begin(MatchDB* db) {
         doc["available"] = OTAUpdater::isUpdateAvailable();
         doc["remote"] = OTAUpdater::getRemoteVersion();
         doc["auto_update"] = OTAUpdater::getAutoUpdate();
+        doc["error"] = OTAUpdater::getLastError();
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    server.on("/update/check", HTTP_POST, []() {
+        // Suspend renderer to free contiguous heap for TLS handshake
+        extern TaskHandle_t rendererHandle;
+        if (rendererHandle) vTaskSuspend(rendererHandle);
+        bool ok = OTAUpdater::checkForUpdate();
+        if (rendererHandle) vTaskResume(rendererHandle);
+        JsonDocument doc;
+        doc["ok"] = ok;
+        doc["available"] = OTAUpdater::isUpdateAvailable();
+        doc["remote"] = OTAUpdater::getRemoteVersion();
         doc["error"] = OTAUpdater::getLastError();
         String out; serializeJson(doc, out);
         server.send(200, "application/json", out);

@@ -108,8 +108,15 @@ bool MatchDB::hasLive() const {
 
 uint8_t MatchDB::liveMask() const {
     auto check = [](const CompetitionData& d) {
-        for (int i = 0; i < d.result_count; i++)
-            if (d.results[i].status == MatchStatus::Live) return true;
+        time_t now = time(nullptr);
+        for (int i = 0; i < d.result_count; i++) {
+            if (d.results[i].status == MatchStatus::Live) {
+                // Ignore stale "live" matches older than 4 hours
+                if (now > 0 && d.results[i].kickoff_utc > 0 && now - d.results[i].kickoff_utc > 14400)
+                    continue;
+                return true;
+            }
+        }
         return false;
     };
     xSemaphoreTake(_mutex, portMAX_DELAY);
