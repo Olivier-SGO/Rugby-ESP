@@ -41,18 +41,10 @@ bool OTAUpdater::checkForUpdate() {
         return false;
     }
 
-    WiFiClientSecure* client = new WiFiClientSecure();
-    if (!client) {
-        strlcpy(_lastError, "Out of memory", sizeof(_lastError));
-        return false;
-    }
-    client->setInsecure();
-    client->setTimeout(15);
-
     HTTPClient http;
     http.setTimeout(30000);
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    http.begin(*client, VERSION_URL);
+    http.begin(String(VERSION_URL));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     Serial.printf("[OTA] Checking GitHub for update... heap=%u max=%u\n",
                   ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -61,13 +53,11 @@ bool OTAUpdater::checkForUpdate() {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d", code);
         Serial.printf("[OTA] version.json failed: HTTP %d\n", code);
         http.end();
-        delete client;
         return false;
     }
 
     String body = http.getString();
     http.end();
-    delete client;
 
     if (!_parseVersionJson(body.c_str())) {
         strlcpy(_lastError, "JSON parse error", sizeof(_lastError));
@@ -118,25 +108,16 @@ bool OTAUpdater::applyUpdate() {
 
 // ── Stream a remote binary into the Update subsystem ─────────────────────────
 bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command) {
-    WiFiClientSecure* client = new WiFiClientSecure();
-    if (!client) {
-        strlcpy(_lastError, "Out of memory (client)", sizeof(_lastError));
-        return false;
-    }
-    client->setInsecure();
-    client->setTimeout(15);
-
     HTTPClient http;
     http.setTimeout(30000);
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    http.begin(*client, url);
+    http.begin(String(url));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     int code = http.GET();
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d on %s",
                  code, command == U_FLASH ? "firmware" : "littlefs");
         http.end();
-        delete client;
         return false;
     }
 
@@ -149,7 +130,6 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     if (!Update.begin(expectedSize, command)) {
         snprintf(_lastError, sizeof(_lastError), "Update.begin failed: %s", Update.errorString());
         http.end();
-        delete client;
         return false;
     }
 
@@ -170,7 +150,6 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
                 snprintf(_lastError, sizeof(_lastError), "Update.write failed at %zu", written);
                 Update.abort();
                 http.end();
-                delete client;
                 return false;
             }
             written += n;
@@ -185,12 +164,10 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     if (!Update.end()) {
         snprintf(_lastError, sizeof(_lastError), "Update.end failed: %s", Update.errorString());
         http.end();
-        delete client;
         return false;
     }
 
     http.end();
-    delete client;
     Serial.printf("[OTA] %s flashed OK: %zu bytes\n",
                   command == U_FLASH ? "Firmware" : "LittleFS", written);
     return true;
