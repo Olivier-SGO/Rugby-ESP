@@ -47,11 +47,15 @@ bool OTAUpdater::checkForUpdate() {
         return false;
     }
     client->setInsecure();
+    client->setTimeout(15);
 
     HTTPClient http;
     http.setTimeout(30000);
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.begin(*client, VERSION_URL);
-    Serial.println("[OTA] Checking GitHub for update...");
+    http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
+    Serial.printf("[OTA] Checking GitHub for update... heap=%u max=%u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     int code = http.GET();
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d", code);
@@ -120,10 +124,13 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
         return false;
     }
     client->setInsecure();
+    client->setTimeout(15);
 
     HTTPClient http;
     http.setTimeout(30000);
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     http.begin(*client, url);
+    http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     int code = http.GET();
     if (code != 200) {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d on %s",

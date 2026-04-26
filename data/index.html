@@ -318,8 +318,16 @@ async function loadUpdateStatus() {
     const r = await fetch('/update/status');
     const d = await r.json();
     document.getElementById('ota-current').textContent = d.current;
-    document.getElementById('ota-remote').textContent = d.available ? d.remote : 'A jour';
-    document.getElementById('ota-error').textContent = d.error || '';
+    let remoteText;
+    if (d.available) {
+      remoteText = d.remote;
+    } else if (d.error) {
+      remoteText = 'Erreur: ' + d.error;
+    } else {
+      remoteText = 'A jour';
+    }
+    document.getElementById('ota-remote').textContent = remoteText;
+    document.getElementById('ota-error').textContent = '';
     document.getElementById('btn-apply').style.display = d.available ? 'block' : 'none';
     cb('auto-update').checked = d.auto_update;
   } catch(e) { console.error('loadUpdateStatus', e); }
