@@ -104,6 +104,9 @@ void DataFetcher::loop() {
 }
 
 void DataFetcher::fetchAll() {
+    // Suspend renderer to prevent heap fragmentation during TLS handshakes
+    if (_rendererHandle) vTaskSuspend(_rendererHandle);
+
     IdalgoParser idalgo;
     CompetitionData top14, prod2, cc;
 
@@ -131,6 +134,8 @@ void DataFetcher::fetchAll() {
     _firstFetchDone = true;
     _db->persist();
     Serial.printf("Fetch done — heap: %u max=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+    if (_rendererHandle) vTaskResume(_rendererHandle);
 }
 
 void DataFetcher::fetchLive() {

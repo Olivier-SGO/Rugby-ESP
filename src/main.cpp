@@ -91,7 +91,7 @@ static void showBootInfo() {
 
 // ── Renderer task (Core 1) ────────────────────────────────────────────────────
 static void renderTask(void*) {
-    const TickType_t frameDelay = pdMS_TO_TICKS(16); // ~60fps
+    const TickType_t frameDelay = pdMS_TO_TICKS(33); // ~30fps
     for (;;) {
         Scenes.tick();
         vTaskDelay(frameDelay);

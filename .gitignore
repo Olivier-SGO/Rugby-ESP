@@ -6,3 +6,4 @@ data/logos/
 .vscode/
 *.elf
 *.map
+version.json
