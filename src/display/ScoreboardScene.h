@@ -14,6 +14,7 @@ public:
     void render() override;
     void freeLogos() {}  // logos are in PSRAM, never freed per-scene
     uint32_t durationMs() const override { return SCENE_SCORE_MS; }
+    bool isLiveMatch() const override { return _md.status == MatchStatus::Live; }
 
 private:
     MatchDisplay _md;

@@ -92,10 +92,16 @@ static void showBootInfo() {
 // ── Renderer task (Core 1) ────────────────────────────────────────────────────
 static void renderTask(void*) {
     const TickType_t frameDelay = pdMS_TO_TICKS(33); // ~30fps
+    static uint32_t lastStackLog = 0;
     for (;;) {
         Scenes.tick();
         vTaskDelay(frameDelay);
         esp_task_wdt_reset();
+        if (millis() - lastStackLog > 30000) {
+            lastStackLog = millis();
+            UBaseType_t hw = uxTaskGetStackHighWaterMark(nullptr);
+            Serial.printf("[STACK] Renderer high-water: %u bytes\n", hw);
+        }
     }
 }
 
@@ -107,18 +113,22 @@ static void bootFetchTask(void*) {
     Fetcher.connectWiFi();
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
 
-    // OTA auto-check FIRST — heap is fresh, before Idalgo fetches fragment it
+    Fetcher.fetchAll();
+
+    // OTA auto-check AFTER Idalgo fetches — match data is already cached
+    if (rendererHandle) vTaskSuspend(rendererHandle);
     OTAUpdater::begin();
     if (OTAUpdater::getAutoUpdate() && WiFi.status() == WL_CONNECTED) {
         if (OTAUpdater::checkForUpdate()) {
             OTAUpdater::applyUpdate(); // restarts on success, never returns
         }
     }
+    if (rendererHandle) vTaskResume(rendererHandle);
 
-    Fetcher.fetchAll();
+    UBaseType_t hw = uxTaskGetStackHighWaterMark(nullptr);
+    Serial.printf("[STACK] BootFetch high-water: %u bytes\n", hw);
 
     s_bootFetchDone = true;
-    if (rendererHandle) vTaskResume(rendererHandle);
     vTaskDelete(nullptr);
 }
 
@@ -149,6 +159,15 @@ void setup() {
         Serial.printf("PSRAM: %u KB total, %u KB free\n",
                       ESP.getPsramSize() / 1024,
                       ESP.getFreePsram() / 1024);
+        // Test PSRAM integrity — detects bad PSRAM or init failure
+        void* test = heap_caps_malloc(65536, MALLOC_CAP_SPIRAM);
+        bool psramTest = false;
+        if (test) {
+            memset(test, 0xA5, 65536);
+            psramTest = (((uint8_t*)test)[0] == 0xA5 && ((uint8_t*)test)[65535] == 0xA5);
+            heap_caps_free(test);
+        }
+        Serial.printf("[HW] PSRAM integrity test: %s\n", psramTest ? "PASS" : "FAIL");
     } else {
         Serial.println("PSRAM: NOT detected");
     }
@@ -177,10 +196,15 @@ void setup() {
     neoSet(0, 64, 0); // green = display OK
     hwTest();
 
-    // Redirect large allocations (>4KB) to PSRAM, leaving SRAM for DMA/TLS small buffers
+    // NOTE: heap_caps_malloc_extmem_enable is intentionally DISABLED.
+    // It forces mbedtls/WiFiClientSecure buffers into PSRAM which is too slow
+    // for TLS handshakes and causes systematic connection failures (HTTP -1).
+    // Large allocations are explicitly routed to PSRAM where we control them:
+    // - LogoCache (heap_caps_malloc SPIRAM)
+    // - readEntireStream (heap_caps_malloc SPIRAM)
+    // - JsonDocument (JsonAllocator.h / spiRamAlloc)
     if (psramFound()) {
-        heap_caps_malloc_extmem_enable(4096);
-        Serial.println("PSRAM: large-alloc redirect enabled (>4KB)");
+        Serial.println("PSRAM: explicit-allocs only (extmem_enable disabled for TLS stability)");
     }
 
     // Start showing cached data immediately while fetch runs in background
@@ -188,7 +212,7 @@ void setup() {
     Scenes.begin(&DB);
     Serial.println("setup: Scenes.begin() done");
 
-    xTaskCreatePinnedToCore(renderTask, "Renderer", 4096, nullptr, 2, &rendererHandle, 1);
+    xTaskCreatePinnedToCore(renderTask, "Renderer", 10240, nullptr, 2, &rendererHandle, 1);
     Serial.println("setup: renderer task created");
 
     // Boot fetch in background — renderer stays alive so user sees old data
@@ -198,7 +222,8 @@ void setup() {
     xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 20480, nullptr, 1, nullptr, 0);
 
     esp_task_wdt_init(WDT_TIMEOUT_S, true);
-    Serial.printf("Boot setup done — heap: %u\n", ESP.getFreeHeap());
+    Serial.printf("Boot setup done — heap: %u  maxBlock: %u  PSRAM: %u\n",
+                  ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
 }
 
 void loop() {

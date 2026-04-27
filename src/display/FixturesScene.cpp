@@ -46,11 +46,11 @@ void FixturesScene::render() {
     const GFXfont* f10 = (const GFXfont*)&AtkinsonHyperlegible10pt7b;
     int16_t x1, y1; uint16_t tw, th;
 
-    // Competition logo header, actual width from file
+    // Competition logo header
     int lw = gCompLogoLgW[_compIdx];
     Display.drawBitmap565(CENTER_MID - lw / 2, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
 
-    // Round / group indicator on home logo bottom-left
+    // Round / group indicator, bottom-left corner
     if (_md.group[0]) {
         Display.drawText(2, 63, _md.group, C_GREY, f8);
     } else if (_md.round > 0) {

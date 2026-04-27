@@ -40,7 +40,11 @@ bool OTAUpdater::checkForUpdate() {
         strlcpy(_lastError, "WiFi not connected", sizeof(_lastError));
         return false;
     }
-
+    if (ESP.getMaxAllocHeap() < 45000) {
+        strlcpy(_lastError, "Heap too low for TLS", sizeof(_lastError));
+        Serial.printf("[OTA] heap too low (max=%u)\n", ESP.getMaxAllocHeap());
+        return false;
+    }
     HTTPClient http;
     http.setTimeout(30000);
     http.begin(String(VERSION_URL));
@@ -150,6 +154,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
                  code, command == U_FLASH ? "firmware" : "littlefs");
         Serial.printf("[OTA] %s\n", _lastError);
         http.end();
+        Update.abort();
         return false;
     }
 

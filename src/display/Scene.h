@@ -13,4 +13,7 @@ public:
 
     // Returns how long this scene should be shown (ms). 0 = use default.
     virtual uint32_t durationMs() const { return 0; }
+
+    // True if this scene displays a currently live match
+    virtual bool isLiveMatch() const { return false; }
 };

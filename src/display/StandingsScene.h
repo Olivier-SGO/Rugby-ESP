@@ -25,6 +25,9 @@ private:
     uint32_t _sceneStartMs = 0;    // for time-based scroll
     uint32_t _durationMs = SCENE_STANDING_MS;
 
+    // Cached mini-logos to avoid LittleFS I/O on every frame
+    const uint16_t* _logoCache[CompetitionData::MAX_STANDING];
+
     static const int16_t ROW_H = 16;
 
     uint16_t rankColor(uint8_t rank) const;

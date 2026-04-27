@@ -2,6 +2,7 @@
 #include "MatchRecord.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "JsonAllocator.h"
 
 MatchDB DB;
 
@@ -219,7 +220,7 @@ static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
 
 void MatchDB::persist() {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    JsonDocument doc;
+    JsonDocument doc(&spiRamAlloc);
     serializeCompetition(doc["t14"].to<JsonObject>(), _top14);
     serializeCompetition(doc["pd2"].to<JsonObject>(), _prod2);
     serializeCompetition(doc["cc" ].to<JsonObject>(), _cc);
@@ -231,7 +232,7 @@ void MatchDB::persist() {
 void MatchDB::load() {
     File f = LittleFS.open("/cache.json", "r");
     if (!f) return;
-    JsonDocument doc;
+    JsonDocument doc(&spiRamAlloc);
     if (deserializeJson(doc, f) == DeserializationError::Ok) {
         deserializeCompetition(doc["t14"], _top14);
         deserializeCompetition(doc["pd2"], _prod2);

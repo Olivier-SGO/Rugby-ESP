@@ -61,109 +61,126 @@ static void decodeHtmlEntities(char* s) {
     s[j] = '\0';
 }
 
-// Read entire HTTP stream into a dynamically-growing buffer (PSRAM for >4KB).
+// Read entire HTTP stream into a dynamically-growing buffer (forced PSRAM).
+#include <esp_heap_caps.h>
 static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outLen) {
-    size_t cap = 65536;
-    char* buf = (char*)malloc(cap);
-    if (!buf) return nullptr;
+    int expectedSize = http.getSize();
+    size_t cap;
+    if (expectedSize > 0) {
+        cap = (size_t)expectedSize + 1;
+    } else {
+        cap = 524288;  // ProD2/Top14 pages can exceed 256KB; PSRAM has plenty of room
+    }
+    char* buf = (char*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        Serial.printf("[OOM] readEntireStream: initial PSRAM alloc failed (%u bytes)\n", (unsigned)cap);
+        return nullptr;
+    }
     size_t len = 0;
     uint32_t lastData = millis();
 
-    int expectedSize = http.getSize();
     if (expectedSize > 0) {
-        // Known size: read exactly expectedSize bytes (WiFiClientSecure
-        // connected() can false-negative when buffer is empty)
+        // Known size: read exactly expectedSize bytes (no realloc needed)
         while (len < (size_t)expectedSize) {
             int avail = stream->available();
             if (!avail) {
-                if (millis() - lastData > 30000) {
-                    Serial.printf("readEntireStream: timeout at %zu / %d bytes\n", len, expectedSize);
+                if (millis() - lastData > 120000) {
+                    Serial.printf("[PSRAM] readEntireStream: timeout at %zu / %d bytes\n", len, expectedSize);
                     break;
                 }
-                vTaskDelay(pdMS_TO_TICKS(2));
+                vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
-            if (len + avail + 1 > cap) {
-                while (cap < len + avail + 1) cap *= 2;
-                char* nb = (char*)realloc(buf, cap);
-                if (!nb) { free(buf); return nullptr; }
-                buf = nb;
-            }
-            int rd = stream->readBytes(buf + len, avail);
+            int toRead = min(avail, 4096);
+            int rd = stream->readBytes(buf + len, toRead);
             len += rd;
             if (rd > 0) lastData = millis();
             if (len > 600000) break;
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     } else {
-        // Unknown size: timeout-based loop
+        // Unknown size: read with timeout, but avoid realloc to prevent heap corruption
         while (true) {
             int avail = stream->available();
             if (!avail) {
-                if (millis() - lastData > 30000) break;
+                if (millis() - lastData > 60000) break;
                 if (!http.connected() && !stream->available()) break;
-                vTaskDelay(pdMS_TO_TICKS(2));
+                vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
             if (len + avail + 1 > cap) {
-                while (cap < len + avail + 1) cap *= 2;
-                char* nb = (char*)realloc(buf, cap);
-                if (!nb) { free(buf); return nullptr; }
-                buf = nb;
+                // Cap exceeded: abort rather than risk realloc corruption
+                Serial.printf("[PSRAM] readEntireStream: cap exceeded (%zu + %d > %zu), aborting\n", len, avail, cap);
+                heap_caps_free(buf);
+                return nullptr;
             }
-            int rd = stream->readBytes(buf + len, avail);
+            int toRead = min(avail, 4096);
+            int rd = stream->readBytes(buf + len, toRead);
             len += rd;
             if (rd > 0) lastData = millis();
             if (len > 600000) break;
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
     buf[len] = '\0';
     outLen = len;
+    Serial.printf("[PSRAM] readEntireStream: %u bytes (cap=%u)\n", (unsigned)len, (unsigned)cap);
     return buf;
+}
+
+bool IdalgoParser::beginSession() {
+    _client = new WiFiClientSecure;
+    if (!_client) return false;
+    _client->setInsecure();
+    _client->setHandshakeTimeout(30);
+
+    _http = new HTTPClient;
+    if (!_http) { delete _client; _client = nullptr; return false; }
+    _http->setReuse(true);
+    _http->setTimeout(60000);
+    _http->addHeader("User-Agent", "Mozilla/5.0 (compatible)");
+    _http->addHeader("Accept-Language", "fr-FR,fr;q=0.9");
+    _http->addHeader("Accept-Encoding", "identity");
+    return true;
+}
+
+void IdalgoParser::endSession() {
+    if (_http)   { _http->end();   delete _http;   _http = nullptr; }
+    if (_client) { _client->stop(); delete _client; _client = nullptr; }
+}
+
+bool IdalgoParser::doRequest(const char* url) {
+    if (!_client || !_http) return false;
+    _http->begin(*_client, url);
+    int code = _http->GET();
+    if (code != 200) {
+        Serial.printf("Idalgo %s → HTTP %d (%s)\n", url, code, _http->errorToString(code).c_str());
+        _http->end(); // close connection on error
+        return false;
+    }
+    return true;
 }
 
 bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     out.clear();
-    HTTPClient http;
-    WiFiClientSecure* client = new WiFiClientSecure;
-    client->setInsecure();
+    if (!doRequest(url)) return false;
 
-    http.begin(*client, url);
-    http.setTimeout(30000);
-    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
-    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
-    http.addHeader("Accept-Encoding", "identity");
-
-    Serial.printf("Idalgo: connecting %s (heap=%u max=%u)\n", url, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    int code = http.GET();
-    if (code != 200) {
-        Serial.printf("Idalgo %s → HTTP %d (heap=%u)\n", url, code, ESP.getFreeHeap());
-        client->stop();
-        http.end(); delete client;
-        return false;
-    }
-
-    String enc = http.header("Content-Encoding");
+    String enc = _http->header("Content-Encoding");
     Serial.printf("Idalgo: HTTP 200, Content-Encoding=%s\n", enc.c_str());
 
-    WiFiClient* stream = http.getStreamPtr();
+    WiFiClient* stream = _http->getStreamPtr();
     size_t totalLen = 0;
-    char* page = readEntireStream(stream, http, totalLen);
+    char* page = readEntireStream(stream, *_http, totalLen);
     if (!page) {
         Serial.println("Idalgo: failed to allocate page buffer");
-        client->stop(); http.end(); delete client;
+        _http->end();
         return false;
     }
 
     Serial.printf("Idalgo: %u bytes total, parsing...\n", totalLen);
-    // Debug: show first 200 chars to detect gzip or error page
-    char dbg[201];
-    strlcpy(dbg, page, sizeof(dbg));
-    Serial.printf("Idalgo: start=%s\n", dbg);
     parseChunk(page, totalLen, out, true);
-    free(page);
-
-    client->stop();
-    http.end(); delete client;
+    heap_caps_free(page);
+    _http->end(); // keep-alive: connection stays open
     Serial.printf("Idalgo: %u bytes, %d results, %d fixtures\n",
                   totalLen, out.result_count, out.fixture_count);
     return true;
@@ -445,48 +462,28 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     MatchData* temp = new MatchData[TEMP_MAX];
     int tempCount = 0;
 
-    HTTPClient http;
-    WiFiClientSecure* client = new WiFiClientSecure;
-    client->setInsecure();
-
-    http.begin(*client, url);
-    http.setTimeout(30000);
-    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
-    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
-    http.addHeader("Accept-Encoding", "identity");
-
-    Serial.printf("IdalgoCalendar: connecting %s (heap=%u max=%u)\n", url, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    int code = http.GET();
-    if (code != 200) {
-        Serial.printf("IdalgoCalendar %s → HTTP %d (heap=%u)\n", url, code, ESP.getFreeHeap());
-        client->stop();
-        http.end(); delete client;
+    if (!doRequest(url)) {
         delete[] temp;
         return false;
     }
 
-    String enc = http.header("Content-Encoding");
+    String enc = _http->header("Content-Encoding");
     Serial.printf("IdalgoCalendar: HTTP 200, Content-Encoding=%s\n", enc.c_str());
 
-    WiFiClient* stream = http.getStreamPtr();
+    WiFiClient* stream = _http->getStreamPtr();
     size_t totalLen = 0;
-    char* page = readEntireStream(stream, http, totalLen);
+    char* page = readEntireStream(stream, *_http, totalLen);
     if (!page) {
         Serial.println("IdalgoCalendar: failed to allocate page buffer");
-        client->stop(); http.end(); delete client;
+        _http->end();
         delete[] temp;
         return false;
     }
 
     Serial.printf("IdalgoCalendar: %u bytes total, parsing...\n", totalLen);
-    char dbg[201];
-    strlcpy(dbg, page, sizeof(dbg));
-    Serial.printf("IdalgoCalendar: start=%s\n", dbg);
     parseCalendarChunk(page, totalLen, temp, tempCount, TEMP_MAX, true);
-    free(page);
-
-    client->stop();
-    http.end(); delete client;
+    heap_caps_free(page);
+    _http->end(); // keep-alive: connection stays open
 
     // ── Filter pools: scheduled + last 12 finished ──
     int scheduledPools = 0;

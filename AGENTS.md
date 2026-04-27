@@ -6,7 +6,7 @@ Fichier de référence pour les agents de codage AI. Ce projet est un firmware e
 
 ## Vue d'ensemble
 
-**Rugby ESP32 Display** est le portage d'un afficheur LED rugby (originellement sur Raspberry Pi 4 / Python) vers une carte **Adafruit MatrixPortal S3** (ESP32-S3, 8MB Flash, 2MB SRAM, **pas de PSRAM**).
+**Rugby ESP32 Display** est le portage d'un afficheur LED rugby (originellement sur Raspberry Pi 4 / Python) vers une carte **Adafruit MatrixPortal S3** (ESP32-S3, 8MB Flash, 320KB SRAM, **2MB PSRAM QSPI**).
 
 La carte pilote **2 panneaux HUB75 128×64 chaînés** pour une surface totale de **256×64 pixels**, affichant en temps réel :
 - Scores live avec minute de jeu
@@ -292,6 +292,29 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 
 ---
 
+## Bugs mémoire corrigés (à ne pas réintroduire)
+
+### Bug 12-bis — Stack overflow `renderTask` (2026-04-27)
+- **Symptôme** : Crash aléatoire pendant `rebuildSlots()` ou après quelques minutes d'affichage.
+- **Cause** : `renderTask` avait une stack de 4096 bytes. `SceneManager::rebuildSlots()` allouait ~3600 bytes de tableaux locaux (`MatchData live[12]`, `nonlive[12]`, `sorted[12]`) sur la stack, laissant moins de 500 bytes de marge pour la chaîne d'appel GFX.
+- **Fix** : Stack passée à **10240 bytes**. Tableaux locaux déplacés en **BSS statique** (`static MatchData liveBuf[]`).
+- **Validation** : `uxTaskGetStackHighWaterMark` affiche ~7948 bytes libres (stable).
+
+### Bug 13 — ArduinoJson 7 + `heap_caps_malloc_extmem_enable` (2026-04-27)
+- **Symptôme** : Crash systématique après le 3e fetch HTTP (ProD2), exactement au moment de `_db->persist()`. Le log s'arrêtait juste avant `[FETCH] done persist`.
+- **Cause** : `heap_caps_malloc_extmem_enable(4096)` redirige les `malloc` >4KB vers PSRAM. ArduinoJson 7 alloue son pool initial avec un petit `malloc` (SRAM), puis fait des `realloc` pour agrandir. **`realloc` sur un bloc SRAM ne peut pas le déplacer vers PSRAM**. Quand le document JSON dépasse le plus gros bloc SRAM contigu (~42KB), `realloc` échoue et corrompt la mémoire.
+- **Fix** : 
+  1. Allocateur PSRAM custom (`JsonAllocator.h`) qui hérite de `ArduinoJson::Allocator`. Tous les `JsonDocument` volumineux utilisent `JsonDocument doc(&spiRamAlloc);` pour forcer l'intégralité du pool en PSRAM.
+  2. `heap_caps_malloc_extmem_enable` remis avec un seuil de **32KB** (au lieu de 4KB). Cela laisse les buffers TLS de `WiFiClientSecure` (~16KB) en SRAM rapide (évite les timeouts handshake / HTTP -1), tout en redirigeant les buffers `readEntireStream` (~512KB) et les gros JSON en PSRAM.
+- **Validation** : `_db->persist()` et `deserializeJson` fonctionnent sans crash. PSRAM free reste >1.5MB. Les 3 compétitions fetchées sans erreur TLS.
+
+### Bug 14 — `DisplayManager::begin()` avec `if (_panel) end()`
+- **Symptôme** : Corruption DMA potentielle si `begin()` est rappelé.
+- **Cause** : `begin()` contenait `if (_panel) end();` qui libérait et ré-allouait les buffers DMA dans un heap déjà fragmenté (documenté comme Bug 11 dans les specs d'origine).
+- **Fix** : Remplacé par un warning log + early return. `begin()` ne doit être appelé qu'une seule fois au boot.
+
+---
+
 ## Tests et validation
 
 - **Environnement matériel** : build `matrixportal_s3`, flash firmware + LittleFS
@@ -319,3 +342,74 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 - TLS/HTTPS utilisé pour toutes les sources de données (ladepeche.fr, lnr.fr, WorldRugby). En production, utiliser `ESP_CERTS_TLS_BUNDLE`. En développement/test, le client peut être en mode insecure.
 - Credentials WiFi en NVS, pas en code source (après le premier boot).
 - Web UI exposée sur le réseau local uniquement (pas d'authentification — usage domestique).
+
+---
+
+## ⚠️ Anti-patterns documentés
+
+### Ne JAMAIS réutiliser `WiFiClientSecure` pour un NOUVEAU handshake
+`WiFiClientSecure` ne supporte pas d'être réutilisé pour ouvrir une **nouvelle** connexion TLS après avoir fermé la précédente (`client->stop()` puis `client->connect()`). L'état interne mbedTLS reste corrompu et provoque systématiquement `HTTP -1 (connection refused)`.
+
+**Exception** : `HTTPClient::setReuse(true)` permet de garder la connexion TCP+TLS ouverte entre plusieurs requêtes HTTP/1.1 vers le même hôte. Dans ce cas, le même `WiFiClientSecure` est utilisé, mais il n'y a qu'**un seul handshake TLS** au début de la session.
+
+**Règles** :
+- Si le serveur ne supporte pas keep-alive → créer un `WiFiClientSecure` frais (via `new`) pour **chaque** requête, et le `delete` immédiatement après `http.end()`.
+- Si le serveur supporte keep-alive → créer **un seul** `WiFiClientSecure` frais au début de la session, le partager entre les requêtes via `HTTPClient::setReuse(true)`, et le `delete` à la fin de la session.
+
+---
+
+## 🔥 Leçons critiques de debugging (2026-04-27)
+
+### 1. Le handshake TLS fragmente irréversiblement le heap SRAM
+Chaque `WiFiClientSecure` handshake consomme ~10-15KB de bloc contigu dans le heap standard et le fragmente. Le `heap` total remonte après `delete client`, mais **`maxAllocHeap` ne se reconsolide pas**. Après un handshake, `maxAllocHeap` chute de ~47K → ~36K. Après deux handshakes, il tombe sous le seuil critique.
+
+**Conséquence** : on ne peut faire qu'**UN seul handshake TLS** par cycle de fetch sans risquer l'échec des suivants.
+
+**Solution** : utiliser `HTTPClient::setReuse(true)` + un seul `WiFiClientSecure` frais pour négocier **une seule connexion TLS**, puis envoyer les 3 requêtes HTTP/1.1 keep-alive dessus. Le client WiFiClientSecure n'est pas « réutilisé » au sens mbedtls (pas de nouveau handshake) — la connexion TCP+TLS reste ouverte.
+
+### 2. Seuil critique de `maxAllocHeap` pour handshake TLS
+| `maxAllocHeap` | Résultat |
+|---|---|
+| ≥ 45K | Handshake quasi-certain |
+| 35-40K | Aléatoire / dépend de la fragmentation exacte |
+| < 35K | Échec systématique (`HTTP -1`) |
+
+**Action** : logger `maxAllocHeap` avant chaque fetch. Si < 40K, ne pas tenter de nouveau handshake.
+
+### 3. `MBEDTLS_SSL_MAX_CONTENT_LEN=8192` est obligatoire
+Sans cette définition dans `platformio.ini`, mbedTLS alloue 2 buffers de 16K = **32K contigus** pour les records TLS. Sur un heap déjà fragmenté (post-boot, post-WiFi), ces 32K ne trouvent pas de bloc contigu et le handshake échoue silencieusement.
+
+Avec `8192`, les buffers font 8K chacun = 16K total, ce qui passe dans un bloc de 35-40K.
+
+**Risque** : si le serveur envoie un record TLS > 8K, la connexion est fermée. À ce jour, `www.ladepeche.fr` n'en envoie pas.
+
+### 4. `WiFiClientSecure` local (stack) peut échouer alors que `HTTPClient` réussit
+Le test `WiFiClientSecure::connect(host, port)` direct peut retourner `false` dans des conditions où `HTTPClient::begin(client, url) + GET()` réussit (même `maxBlock`, même heap). `HTTPClient` configure probablement des paramètres additionnels (SNI, timeout socket, etc.).
+
+**Règle** : ne pas se fier aux tests TLS bruts pour diagnostiquer un problème de connexion. Toujours tester via `HTTPClient`.
+
+### 5. Cap `readEntireStream` : 512K minimum
+Les pages HTML de ladepeche.fr (Top14/ProD2/CC) font entre 200K et 380K. Un cap de 64K causait `cap exceeded`. 256K était encore insuffisant (ProD2 a dépassé 262K). **512K** (`524288`) est la valeur de sécurité.
+
+Le buffer est alloué en PSRAM via `heap_caps_malloc(MALLOC_CAP_SPIRAM)` — la taille n'a pas d'impact sur le heap SRAM.
+
+### 6. Timeout `readEntireStream` : 120s pour les gros fichiers
+Le TLS stream peut "staller" plusieurs dizaines de secondes sans livrer de données (probablement buffering côté serveur ou congestion LWIP). Un timeout de 30s causait des échecs systématiques à ~266K/378K. **120s** est la valeur de sécurité.
+
+Dans la boucle de lecture, utiliser `vTaskDelay(pdMS_TO_TICKS(10))` quand `stream->available() == 0` pour céder le CPU au stack TCP.
+
+### 7. Les gros objets doivent être en PSRAM, pas en BSS
+Chaque `CompetitionData` fait ~4.3K. Empiler 4 instances en `static` (BSS) réduisait le heap initial de **~17K**, ce qui faisait passer `maxAllocHeap` sous le seuil critique au boot.
+
+**Règle** : les buffers de travail > 1K (surtout ceux utilisés pendant le fetch) doivent être alloués en PSRAM :
+```cpp
+CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
+```
+
+### 8. `ESP.getMaxAllocHeap()` peut crasher après fragmentation extrême
+Après un handshake TLS + parsing d'une page de 378K, le heap est tellement fragmenté que `getMaxAllocHeap()` (qui parcourt les métadonnées du heap) peut lire des structures corrompues et causer un `LoadProhibited` / reboot.
+
+**Règle** : ne jamais appeler `ESP.getMaxAllocHeap()` dans les logs des fonctions de fetch/parsing. Utiliser `ESP.getFreeHeap()` uniquement, ou ne logger le heap qu'au niveau `fetchAll()` (entre les requêtes, pas à l'intérieur).
+
+---
+

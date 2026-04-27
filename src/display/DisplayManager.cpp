@@ -4,7 +4,10 @@
 DisplayManager Display;
 
 bool DisplayManager::begin() {
-    if (_panel) end();
+    if (_panel) {
+        Serial.println("[WARN] Display.begin() called twice — ignored");
+        return true;
+    }
     HUB75_I2S_CFG cfg(PANEL_W, PANEL_H, CHAIN_LEN);
     cfg.gpio.r1  = HUB75_R1;  cfg.gpio.g1  = HUB75_G1;  cfg.gpio.b1  = HUB75_B1;
     cfg.gpio.r2  = HUB75_R2;  cfg.gpio.g2  = HUB75_G2;  cfg.gpio.b2  = HUB75_B2;

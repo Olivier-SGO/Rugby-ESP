@@ -3,6 +3,7 @@
 #include "WiFiManager.h"
 #include "MatchRecord.h"
 #include "OTAUpdater.h"
+#include "JsonAllocator.h"
 #include <WebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
@@ -30,7 +31,7 @@ void WebUI::begin(MatchDB* db) {
 
     // GET /status
     server.on("/status", HTTP_GET, []() {
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         doc["wifi"]    = WiFi.SSID();
         doc["ip"]      = WiFi.localIP().toString();
         doc["heap"]    = ESP.getFreeHeap();
@@ -46,7 +47,7 @@ void WebUI::begin(MatchDB* db) {
     // GET /scan → list available WiFi networks
     server.on("/scan", HTTP_GET, []() {
         int n = WiFi.scanNetworks();
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         auto arr = doc.to<JsonArray>();
         for (int i = 0; i < n; i++) {
             auto o = arr.add<JsonObject>();
@@ -60,7 +61,7 @@ void WebUI::begin(MatchDB* db) {
 
     // POST /config  body: {"brightness":80}
     server.on("/config", HTTP_POST, []() {
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         if (deserializeJson(doc, server.arg("plain")) == DeserializationError::Ok) {
             Preferences prefs;
             prefs.begin("rugby", false);
@@ -90,7 +91,7 @@ void WebUI::begin(MatchDB* db) {
     server.on("/prefs", HTTP_GET, []() {
         DisplayPrefs p;
         loadDisplayPrefs(p);
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         const char* keys[3] = {"top14", "prod2", "cc"};
         for (int i = 0; i < 3; i++) {
             doc[keys[i]]["enabled"]   = p.comp[i].enabled;
@@ -107,7 +108,7 @@ void WebUI::begin(MatchDB* db) {
 
     // POST /prefs  body: {"top14":{"enabled":true,"scores":true,...}, "score_s":8, ...}
     server.on("/prefs", HTTP_POST, []() {
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         if (deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok) {
             server.send(400, "application/json", "{\"error\":\"invalid json\"}");
             return;
@@ -135,7 +136,7 @@ void WebUI::begin(MatchDB* db) {
     // GET /wifi  → list of configured networks
     server.on("/wifi", HTTP_GET, []() {
         WiFiManager::loadNetworks();
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         auto arr = doc.to<JsonArray>();
         for (int i = 0; i < WiFiManager::count; i++) {
             auto o = arr.add<JsonObject>();
@@ -147,7 +148,7 @@ void WebUI::begin(MatchDB* db) {
 
     // POST /wifi  body: [{"ssid":"...","password":"..."}, ...]
     server.on("/wifi", HTTP_POST, []() {
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         if (deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok) {
             server.send(400, "application/json", "{\"error\":\"invalid json\"}");
             return;
@@ -186,7 +187,7 @@ void WebUI::begin(MatchDB* db) {
         uint8_t fixture_count = f.read();
         uint8_t current_round = f.read();
 
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         doc["version"] = version;
         doc["current_round"] = current_round;
         auto results = doc["results"].to<JsonArray>();
@@ -226,7 +227,7 @@ void WebUI::begin(MatchDB* db) {
 
     // ── OTA update endpoints ─────────────────────────────────────────────────
     server.on("/update/status", HTTP_GET, []() {
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         doc["current"] = FIRMWARE_VERSION;
         doc["available"] = OTAUpdater::isUpdateAvailable();
         doc["remote"] = OTAUpdater::getRemoteVersion();
@@ -242,7 +243,7 @@ void WebUI::begin(MatchDB* db) {
         if (rendererHandle) vTaskSuspend(rendererHandle);
         bool ok = OTAUpdater::checkForUpdate();
         if (rendererHandle) vTaskResume(rendererHandle);
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         doc["ok"] = ok;
         doc["available"] = OTAUpdater::isUpdateAvailable();
         doc["remote"] = OTAUpdater::getRemoteVersion();
@@ -252,7 +253,7 @@ void WebUI::begin(MatchDB* db) {
     });
 
     server.on("/update/auto", HTTP_POST, []() {
-        JsonDocument doc;
+        JsonDocument doc(&spiRamAlloc);
         if (deserializeJson(doc, server.arg("plain")) == DeserializationError::Ok && doc["enabled"].is<bool>()) {
             OTAUpdater::setAutoUpdate(doc["enabled"]);
         }

@@ -45,7 +45,7 @@ void ScoreboardScene::drawLogos() {
     if (_homeLogo) Display.drawBitmap565(0, 0, LOGO_LG_W, LOGO_LG_H, _homeLogo);
     if (_awayLogo) Display.drawBitmap565(DISPLAY_W - LOGO_LG_W, 0, LOGO_LG_W, LOGO_LG_H, _awayLogo);
 
-    // Round / group indicator overlaid on home logo, bottom-left — very discrete, 1px plain text
+    // Round / group indicator, bottom-left corner
     const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
     if (_md.group[0]) {
         Display.drawText(2, 63, _md.group, C_GREY, af);

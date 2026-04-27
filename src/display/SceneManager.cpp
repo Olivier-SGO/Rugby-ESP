@@ -8,6 +8,16 @@
 
 SceneManager Scenes;
 
+// Chronological order for CC knockout phases (pools < 1/8 < 1/4 < 1/2 < Finale)
+static int ccPhaseOrder(const char* group) {
+    if (strncmp(group, "Gr.", 3) == 0) return 0;
+    if (strcmp(group, "1/8F") == 0) return 1;
+    if (strcmp(group, "1/4F") == 0) return 2;
+    if (strcmp(group, "1/2F") == 0) return 3;
+    if (strcmp(group, "Finale") == 0) return 4;
+    return 0;
+}
+
 void SceneManager::begin(MatchDB* db) {
     _db = db;
     loadCompLogos();
@@ -51,6 +61,19 @@ void SceneManager::tick() {
         _livePriority = false;
     }
 
+    // Live priority: jump to the first live match scene if we're not already on one
+    if (_livePriority && !_slots[_current].scene->isLiveMatch()) {
+        for (int i = 0; i < _slotCount; i++) {
+            if (_slots[i].scene->isLiveMatch()) {
+                _current = i;
+                activateCurrent();
+                _sceneStart = millis();
+                _dirty = true;
+                break;
+            }
+        }
+    }
+
     uint32_t dur = _slots[_current].durationMs;
     if (!_livePriority && millis() - _sceneStart > dur) {
         nextScene();
@@ -75,6 +98,14 @@ void SceneManager::tick() {
     static uint32_t lastAnimatedRender = 0;
     if (animated && millis() - lastAnimatedRender < 100) return;
     if (animated) lastAnimatedRender = millis();
+
+    // Force re-render live matches every 20 seconds even if data hasn't changed
+    bool isLive = s->isLiveMatch();
+    static uint32_t lastLiveRender = 0;
+    if (isLive && millis() - lastLiveRender > 20000) {
+        _dirty = true;
+        lastLiveRender = millis();
+    }
 
     if (_dirty || animated) {
         s->render();
@@ -132,47 +163,63 @@ void SceneManager::rebuildSlots() {
     uint32_t fixtureMs = (uint32_t)prefs.fixture_s  * 1000;
     uint32_t standMs   = (uint32_t)prefs.standing_s * 1000;
 
+    // Static buffers to avoid stack overflow in renderTask (was ~3600 bytes local)
+    static MatchData liveBuf[CompetitionData::MAX_MATCHES];
+    static MatchData nonliveBuf[CompetitionData::MAX_MATCHES];
+    static MatchData sortedBuf[CompetitionData::MAX_MATCHES];
+
     auto addComp = [&](const CompetitionData* d, int ci) {
         if (!d) return;
         const CompPrefs& p = prefs.comp[ci];
         if (!p.enabled) return;
 
         if (p.scores) {
-            // For Champions Cup, sort results by group so same pool plays consecutively
-            if (ci == 2 && d->result_count > 1) {
-                MatchData sorted[CompetitionData::MAX_MATCHES];
-                memcpy(sorted, d->results, sizeof(MatchData) * d->result_count);
-                for (int i = 0; i < d->result_count - 1; i++) {
-                    for (int j = 0; j < d->result_count - i - 1; j++) {
-                        if (strcmp(sorted[j].group, sorted[j+1].group) > 0) {
-                            MatchData tmp = sorted[j];
-                            sorted[j] = sorted[j+1];
-                            sorted[j+1] = tmp;
+            // Separate live matches (always first) from non-live
+            MatchData* live = liveBuf;
+            MatchData* nonlive = nonliveBuf;
+            int nLive = 0, nNonlive = 0;
+            for (int i = 0; i < d->result_count; i++) {
+                if (d->results[i].status == MatchStatus::Live)
+                    live[nLive++] = d->results[i];
+                else
+                    nonlive[nNonlive++] = d->results[i];
+            }
+
+            // Sort non-live: CC by phase order, others keep DB order
+            if (ci == 2 && nNonlive > 1) {
+                for (int i = 0; i < nNonlive - 1; i++) {
+                    for (int j = 0; j < nNonlive - i - 1; j++) {
+                        int o1 = ccPhaseOrder(nonlive[j].group);
+                        int o2 = ccPhaseOrder(nonlive[j+1].group);
+                        if (o1 > o2 || (o1 == o2 && nonlive[j].round > nonlive[j+1].round)) {
+                            MatchData tmp = nonlive[j];
+                            nonlive[j] = nonlive[j+1];
+                            nonlive[j+1] = tmp;
                         }
                     }
                 }
-                for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
-                    _scoreScenes[scoreIdx].setMatch(sorted[i], comps[ci].name, comps[ci].color,
-                                                    i, d->result_count);
-                    addSlot(&_scoreScenes[scoreIdx], scoreMs);
-                }
-            } else {
-                for (int i = 0; i < d->result_count && scoreIdx < MAX_SCORE_SCENES; i++, scoreIdx++) {
-                    _scoreScenes[scoreIdx].setMatch(d->results[i], comps[ci].name, comps[ci].color,
-                                                    i, d->result_count);
-                    addSlot(&_scoreScenes[scoreIdx], scoreMs);
-                }
+            }
+
+            int total = nLive + nNonlive;
+            for (int i = 0; i < total && scoreIdx < MAX_SCORE_SCENES; i++) {
+                const MatchData* m = (i < nLive) ? &live[i] : &nonlive[i - nLive];
+                _scoreScenes[scoreIdx].setMatch(*m, comps[ci].name, comps[ci].color,
+                                                i, total);
+                addSlot(&_scoreScenes[scoreIdx], scoreMs);
+                scoreIdx++;
             }
         }
 
         if (p.fixtures) {
-            // Sort CC fixtures by group too
+            // Sort CC fixtures chronologically by knockout phase
             if (ci == 2 && d->fixture_count > 1) {
-                MatchData sorted[CompetitionData::MAX_MATCHES];
+                MatchData* sorted = sortedBuf;
                 memcpy(sorted, d->fixtures, sizeof(MatchData) * d->fixture_count);
                 for (int i = 0; i < d->fixture_count - 1; i++) {
                     for (int j = 0; j < d->fixture_count - i - 1; j++) {
-                        if (strcmp(sorted[j].group, sorted[j+1].group) > 0) {
+                        int o1 = ccPhaseOrder(sorted[j].group);
+                        int o2 = ccPhaseOrder(sorted[j+1].group);
+                        if (o1 > o2 || (o1 == o2 && sorted[j].round > sorted[j+1].round)) {
                             MatchData tmp = sorted[j];
                             sorted[j] = sorted[j+1];
                             sorted[j+1] = tmp;

@@ -41,12 +41,18 @@ bool initLogoCache() {
     }
 
     size_t totalBytes = 0;
+    uint32_t psramStart = ESP.getFreePsram();
     f = dir.openNextFile();
     while (f && _count < n) {
         const char* name = f.name();
         if (!strstr(name, ".bin")) { f = dir.openNextFile(); continue; }
 
         size_t sz = f.size();
+        if (ESP.getFreePsram() < 262144) {
+            Serial.printf("LogoCache: PSRAM low (<256KB), skipping %s\n", name);
+            f = dir.openNextFile();
+            continue;
+        }
         uint16_t* buf = (uint16_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
         if (!buf) {
             Serial.printf("LogoCache: PSRAM OOM for %s (%u bytes)\n", name, (unsigned)sz);
@@ -80,8 +86,10 @@ bool initLogoCache() {
         f = dir.openNextFile();
     }
 
-    Serial.printf("LogoCache: %d/%d logos loaded into PSRAM (%u bytes)\n",
-                  _count, n, (unsigned)totalBytes);
+    Serial.printf("LogoCache: %d/%d logos loaded into PSRAM (%u bytes), PSRAM used=%uKB free=%uKB\n",
+                  _count, n, (unsigned)totalBytes,
+                  (psramStart - ESP.getFreePsram()) / 1024,
+                  ESP.getFreePsram() / 1024);
     return _count > 0;
 }
 
