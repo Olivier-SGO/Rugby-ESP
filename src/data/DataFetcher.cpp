@@ -128,11 +128,6 @@ void DataFetcher::fetchAll() {
                   prefs.comp[0].enabled, prefs.comp[1].enabled, prefs.comp[2].enabled);
 
     IdalgoParser idalgo;
-    if (!idalgo.beginSession()) {
-        Serial.println("[FETCH] IdalgoParser session init failed");
-        if (_rendererHandle) vTaskResume(_rendererHandle);
-        return;
-    }
 
     CompetitionData* top14 = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
     CompetitionData* prod2 = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
@@ -186,8 +181,6 @@ void DataFetcher::fetchAll() {
     if (top14) heap_caps_free(top14);
     if (prod2) heap_caps_free(prod2);
     if (cc)    heap_caps_free(cc);
-
-    idalgo.endSession();
 
     _firstFetchDone = true;
     Serial.printf("[FETCH] before persist: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());

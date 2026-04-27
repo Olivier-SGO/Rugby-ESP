@@ -1,6 +1,6 @@
 #include "IdalgoParser.h"
 #include "TeamData.h"
-#include <WiFiClientSecure.h>
+#include "WiFiClientSecureSmall.h"
 #include <Arduino.h>
 #include <time.h>
 
@@ -128,59 +128,40 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
     return buf;
 }
 
-bool IdalgoParser::beginSession() {
-    _client = new WiFiClientSecure;
-    if (!_client) return false;
-    _client->setInsecure();
-    _client->setHandshakeTimeout(30);
-
-    _http = new HTTPClient;
-    if (!_http) { delete _client; _client = nullptr; return false; }
-    _http->setReuse(true);
-    _http->setTimeout(60000);
-    _http->addHeader("User-Agent", "Mozilla/5.0 (compatible)");
-    _http->addHeader("Accept-Language", "fr-FR,fr;q=0.9");
-    _http->addHeader("Accept-Encoding", "identity");
-    return true;
-}
-
-void IdalgoParser::endSession() {
-    if (_http)   { _http->end();   delete _http;   _http = nullptr; }
-    if (_client) { _client->stop(); delete _client; _client = nullptr; }
-}
-
-bool IdalgoParser::doRequest(const char* url) {
-    if (!_client || !_http) return false;
-    _http->begin(*_client, url);
-    int code = _http->GET();
-    if (code != 200) {
-        Serial.printf("Idalgo %s → HTTP %d (%s)\n", url, code, _http->errorToString(code).c_str());
-        _http->end(); // close connection on error
-        return false;
-    }
-    return true;
-}
-
 bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     out.clear();
-    if (!doRequest(url)) return false;
+    WiFiClientSecureSmall client;
+    client.setInsecure();
+    client.setHandshakeTimeout(30);
+    HTTPClient http;
+    http.setTimeout(60000);
+    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
+    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
+    http.addHeader("Accept-Encoding", "identity");
+    http.begin(client, url);
+    int code = http.GET();
+    if (code != 200) {
+        Serial.printf("Idalgo %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
+        http.end();
+        return false;
+    }
 
-    String enc = _http->header("Content-Encoding");
+    String enc = http.header("Content-Encoding");
     Serial.printf("Idalgo: HTTP 200, Content-Encoding=%s\n", enc.c_str());
 
-    WiFiClient* stream = _http->getStreamPtr();
+    WiFiClient* stream = http.getStreamPtr();
     size_t totalLen = 0;
-    char* page = readEntireStream(stream, *_http, totalLen);
+    char* page = readEntireStream(stream, http, totalLen);
     if (!page) {
         Serial.println("Idalgo: failed to allocate page buffer");
-        _http->end();
+        http.end();
         return false;
     }
 
     Serial.printf("Idalgo: %u bytes total, parsing...\n", totalLen);
     parseChunk(page, totalLen, out, true);
     heap_caps_free(page);
-    _http->end(); // keep-alive: connection stays open
+    http.end();
     Serial.printf("Idalgo: %u bytes, %d results, %d fixtures\n",
                   totalLen, out.result_count, out.fixture_count);
     return true;
@@ -252,6 +233,19 @@ int IdalgoParser::parseChunk(const char* chunk, size_t len,
 
 void IdalgoParser::extractRoundLinks(const char* chunk, size_t len, CompetitionData& out) {
     const char* end = chunk + len;
+
+    // Extract current round from navigation (e.g. "Journée 22")
+    const char* cur = strstr(chunk, "span_idalgo_content_competition_navigation_days_listbox_current");
+    if (cur && cur < end) {
+        const char* gt = strchr(cur, '>');
+        if (gt) {
+            const char* p = gt + 1;
+            while (*p && !isdigit((unsigned char)*p)) p++;
+            int round = atoi(p);
+            if (round > 0 && round < 40) out.current_round = (uint8_t)round;
+        }
+    }
+
     const char* p = chunk;
     while (p < end) {
         p = strstr(p, "resultats/");
@@ -462,20 +456,32 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     MatchData* temp = new MatchData[TEMP_MAX];
     int tempCount = 0;
 
-    if (!doRequest(url)) {
+    WiFiClientSecureSmall client;
+    client.setInsecure();
+    client.setHandshakeTimeout(30);
+    HTTPClient http;
+    http.setTimeout(60000);
+    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
+    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
+    http.addHeader("Accept-Encoding", "identity");
+    http.begin(client, url);
+    int code = http.GET();
+    if (code != 200) {
+        Serial.printf("IdalgoCalendar %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
+        http.end();
         delete[] temp;
         return false;
     }
 
-    String enc = _http->header("Content-Encoding");
+    String enc = http.header("Content-Encoding");
     Serial.printf("IdalgoCalendar: HTTP 200, Content-Encoding=%s\n", enc.c_str());
 
-    WiFiClient* stream = _http->getStreamPtr();
+    WiFiClient* stream = http.getStreamPtr();
     size_t totalLen = 0;
-    char* page = readEntireStream(stream, *_http, totalLen);
+    char* page = readEntireStream(stream, http, totalLen);
     if (!page) {
         Serial.println("IdalgoCalendar: failed to allocate page buffer");
-        _http->end();
+        http.end();
         delete[] temp;
         return false;
     }
@@ -483,7 +489,7 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     Serial.printf("IdalgoCalendar: %u bytes total, parsing...\n", totalLen);
     parseCalendarChunk(page, totalLen, temp, tempCount, TEMP_MAX, true);
     heap_caps_free(page);
-    _http->end(); // keep-alive: connection stays open
+    http.end();
 
     // ── Filter pools: scheduled + last 12 finished ──
     int scheduledPools = 0;
@@ -583,7 +589,11 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
                 raw[i] = spanPos[i]; i++;
             }
             raw[i] = '\0';
-            strlcpy(match.group, raw, sizeof(match.group));
+            // Normalise knockout phase labels (source sometimes omits the 'F')
+            if (strcmp(raw, "1/8") == 0) strlcpy(match.group, "1/8F", sizeof(match.group));
+            else if (strcmp(raw, "1/4") == 0) strlcpy(match.group, "1/4F", sizeof(match.group));
+            else if (strcmp(raw, "1/2") == 0) strlcpy(match.group, "1/2F", sizeof(match.group));
+            else strlcpy(match.group, raw, sizeof(match.group));
         }
     }
 
