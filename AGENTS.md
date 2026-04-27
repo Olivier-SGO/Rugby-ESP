@@ -95,15 +95,20 @@ bash tools/gen_fonts.sh                 # régénère les headers de fonts dans 
 [HTTP stream] → [buffer 4KB] → [IdalgoParser] → [MatchDB] → [Scene] → [BackBuffer RGB332] → [DMA swap]
 ```
 
-### Mémoire (pas de PSRAM)
+### Mémoire (320KB SRAM + 2MB PSRAM QSPI)
 
-| Ressource | Taille | Détail |
-|---|---|---|
-| Back buffer | 16KB | RGB332 (1 byte/pixel), 256×64 |
-| Logos grands | 16KB max | 2 slots × 64×64 RGB565 chargés depuis LittleFS à la demande |
-| Logos mini | 512 bytes | 16×16 RGB565 (Standings) |
-| Logos compétition | ~5.6KB | Buffers statiques `gCompLogoLg` (56×20) et `gCompLogoSm` (32×12) |
-| HTML parsing | 4KB chunks | Stream parsing, jamais de buffer complet en RAM |
+| Ressource | Taille | Zone | Détail |
+|---|---|---|---|
+| Back buffer | 16KB | SRAM | RGB332 (1 byte/pixel), 256×64 |
+| Logos grands | 16KB max | SRAM | 2 slots × 64×64 RGB565 chargés depuis LittleFS à la demande |
+| Logos mini | 512 bytes | SRAM | 16×16 RGB565 (Standings) |
+| Logos compétition | ~5.6KB | SRAM | Buffers statiques `gCompLogoLg` (56×20) et `gCompLogoSm` (32×12) |
+| HTML page buffer | 512KB | PSRAM | Buffer de lecture stream (cap=524288) |
+| CompetitionData | ~4.3KB × 3 | PSRAM | `top14`, `prod2`, `cc` alloués avec `MALLOC_CAP_SPIRAM` |
+| ArduinoJson pool | variable | PSRAM | Allocateur custom `SpiRamAllocator` |
+| HTML parsing chunks | 4KB | SRAM | Stream parsing, jamais de buffer complet en SRAM |
+
+**Règle** : `heap_caps_malloc_extmem_enable()` est **intentionnellement désactivé** (Bug 13). Les gros buffers doivent être alloués explicitement en PSRAM via `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`.
 
 Le boot séquentiel libère la RAM avant `Display.begin()` :
 1. Boot fetch WiFi+HTTP en tâche dédiée (16KB stack, Core 0)
@@ -183,7 +188,7 @@ Les commentaires de code et la documentation technique sont principalement en **
 
 1. **Ne jamais appeler `Display.end()/begin()` après le boot** — cela re-malloc les buffers DMA dans un heap fragmenté et provoque une corruption (Bug 11).
 2. **`vTaskSuspend(rendererHandle)` requis** avant toute écriture directe sur l'affichage dans `loop()` — le renderer (Core 1, prio 2) préempte `loop()` (prio 1) en moins de 33ms (Bug 12).
-3. **Stack size des tâches** : 16KB minimum pour tout ce qui fait du HTTP/JSON/TLS. Le défaut FreeRTOS (2KB) crashe silencieusement.
+3. **Stack size des tâches** : `DataFetcher` 16KB (HTTP/TLS/JSON), `BootFetch` 20KB, `Renderer` 10KB. Le défaut FreeRTOS (2KB) crashe silencieusement.
 4. **WDT** : utiliser `esp_task_wdt_init(timeout_s, true)` — `esp_task_wdt_config_t` / `esp_task_wdt_reconfigure` n'existent pas dans le framework Arduino ESP32 3.x.
 5. **Accents** : `TeamData.h::stripAccents` utilise des `char` literals (`'e'`), pas des string literals (`"e"`) — sinon erreur de compilation `-fpermissive`.
 6. **SVG** : Pillow ne supporte pas SVG nativement. Utiliser `cairosvg` + cairo (Homebrew) pour les logos comme Ulster.
@@ -304,10 +309,10 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 ### Bug 13 — ArduinoJson 7 + `heap_caps_malloc_extmem_enable` (2026-04-27)
 - **Symptôme** : Crash systématique après le 3e fetch HTTP (ProD2), exactement au moment de `_db->persist()`. Le log s'arrêtait juste avant `[FETCH] done persist`.
 - **Cause** : `heap_caps_malloc_extmem_enable(4096)` redirige les `malloc` >4KB vers PSRAM. ArduinoJson 7 alloue son pool initial avec un petit `malloc` (SRAM), puis fait des `realloc` pour agrandir. **`realloc` sur un bloc SRAM ne peut pas le déplacer vers PSRAM**. Quand le document JSON dépasse le plus gros bloc SRAM contigu (~42KB), `realloc` échoue et corrompt la mémoire.
-- **Fix** : 
-  1. Allocateur PSRAM custom (`JsonAllocator.h`) qui hérite de `ArduinoJson::Allocator`. Tous les `JsonDocument` volumineux utilisent `JsonDocument doc(&spiRamAlloc);` pour forcer l'intégralité du pool en PSRAM.
-  2. `heap_caps_malloc_extmem_enable` remis avec un seuil de **32KB** (au lieu de 4KB). Cela laisse les buffers TLS de `WiFiClientSecure` (~16KB) en SRAM rapide (évite les timeouts handshake / HTTP -1), tout en redirigeant les buffers `readEntireStream` (~512KB) et les gros JSON en PSRAM.
-- **Validation** : `_db->persist()` et `deserializeJson` fonctionnent sans crash. PSRAM free reste >1.5MB. Les 3 compétitions fetchées sans erreur TLS.
+- **Fix** :
+  1. Allocateur PSRAM custom (`JsonAllocator.h`) qui hérite de `ArduinoJson::Allocator`. Tous les `JsonDocument` volumineux utilisent `SpiRamJsonDocument` pour forcer l'intégralité du pool en PSRAM.
+  2. **`heap_caps_malloc_extmem_enable()` est intentionnellement DÉSACTIVÉ** (`main.cpp`). Cette fonction force mbedtls dans la PSRAM lente et provoque des timeouts de handshake systématiques. Tous les gros buffers doivent être alloués explicitement en PSRAM via `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`.
+- **Validation** : `_db->persist()` et `deserializeJson` fonctionnent sans crash. PSRAM free reste >1.5MB.
 
 ### Bug 14 — `DisplayManager::begin()` avec `if (_panel) end()`
 - **Symptôme** : Corruption DMA potentielle si `begin()` est rappelé.
@@ -351,22 +356,20 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 ### Ne JAMAIS réutiliser `WiFiClientSecure` pour un NOUVEAU handshake
 `WiFiClientSecure` ne supporte pas d'être réutilisé pour ouvrir une **nouvelle** connexion TLS après avoir fermé la précédente (`client->stop()` puis `client->connect()`). L'état interne mbedTLS reste corrompu et provoque systématiquement `HTTP -1 (connection refused)`.
 
-**Exception** : `HTTPClient::setReuse(true)` permet de garder la connexion TCP+TLS ouverte entre plusieurs requêtes HTTP/1.1 vers le même hôte. Dans ce cas, le même `WiFiClientSecure` est utilisé, mais il n'y a qu'**un seul handshake TLS** au début de la session.
+**Approche actuelle** : client frais par requête. Chaque `fetch()` / `fetchCalendar()` crée localement un `WiFiClientSecureSmall` (ou `WiFiClientSecure`) sur la stack. Le destructeur libère proprement les buffers TLS après chaque requête. Pas de keep-alive — le serveur ladepeche.fr ferme les connexions inactives trop vite pour que le réusage soit fiable.
 
-**Règles** :
-- Si le serveur ne supporte pas keep-alive → créer un `WiFiClientSecure` frais (via `new`) pour **chaque** requête, et le `delete` immédiatement après `http.end()`.
-- Si le serveur supporte keep-alive → créer **un seul** `WiFiClientSecure` frais au début de la session, le partager entre les requêtes via `HTTPClient::setReuse(true)`, et le `delete` à la fin de la session.
+**Règle** : créer un `WiFiClientSecure` frais pour **chaque** requête. Ne jamais partager un client entre deux requêtes qui nécessiteraient chacune un handshake TLS.
 
 ---
 
 ## 🔥 Leçons critiques de debugging (2026-04-27)
 
-### 1. Le handshake TLS fragmente irréversiblement le heap SRAM
-Chaque `WiFiClientSecure` handshake consomme ~10-15KB de bloc contigu dans le heap standard et le fragmente. Le `heap` total remonte après `delete client`, mais **`maxAllocHeap` ne se reconsolide pas**. Après un handshake, `maxAllocHeap` chute de ~47K → ~36K. Après deux handshakes, il tombe sous le seuil critique.
+### 1. Le handshake TLS consomme beaucoup de heap SRAM
+Chaque `WiFiClientSecure` handshake alloue deux buffers TLS (input + output). Avec la configuration par défaut du SDK ESP32, ces buffers font 16KB chacun = **32KB total**. Sur un heap déjà fragmenté, ces 32KB ne trouvent pas de bloc contigu et le handshake échoue (`HTTP -1`).
 
-**Conséquence** : on ne peut faire qu'**UN seul handshake TLS** par cycle de fetch sans risquer l'échec des suivants.
+**Solution** : le patch `tools/patch_mbedtls.py` (exécuté automatiquement via `extra_scripts`) force `max_frag_len=4096` dans `ssl_client.cpp`. Les buffers TLS passent à **4KB chacun = 8KB total**, ce qui passe dans un bloc de 35-40K.
 
-**Solution** : utiliser `HTTPClient::setReuse(true)` + un seul `WiFiClientSecure` frais pour négocier **une seule connexion TLS**, puis envoyer les 3 requêtes HTTP/1.1 keep-alive dessus. Le client WiFiClientSecure n'est pas « réutilisé » au sens mbedtls (pas de nouveau handshake) — la connexion TCP+TLS reste ouverte.
+Avec ce patch + client frais par requête (buffers libérés entre chaque requête), les 4 requêtes d'un cycle de fetch (CC + Top14 + nextJournee + ProD2) passent sans problème.
 
 ### 2. Seuil critique de `maxAllocHeap` pour handshake TLS
 | `maxAllocHeap` | Résultat |
@@ -377,12 +380,12 @@ Chaque `WiFiClientSecure` handshake consomme ~10-15KB de bloc contigu dans le he
 
 **Action** : logger `maxAllocHeap` avant chaque fetch. Si < 40K, ne pas tenter de nouveau handshake.
 
-### 3. `MBEDTLS_SSL_MAX_CONTENT_LEN=8192` est obligatoire
-Sans cette définition dans `platformio.ini`, mbedTLS alloue 2 buffers de 16K = **32K contigus** pour les records TLS. Sur un heap déjà fragmenté (post-boot, post-WiFi), ces 32K ne trouvent pas de bloc contigu et le handshake échoue silencieusement.
+### 3. `MBEDTLS_SSL_MAX_CONTENT_LEN=8192` dans `platformio.ini` ne suffit pas
+Cette définition est passée au compilateur, mais le SDK ESP32 la redéfinit à **16384** via `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN`. La librairie précompilée utilise donc 16KB par buffer (32KB total). Sur un heap fragmenté, ces 32KB ne trouvent pas de bloc contigu et le handshake échoue silencieusement.
 
-Avec `8192`, les buffers font 8K chacun = 16K total, ce qui passe dans un bloc de 35-40K.
+**Le vrai mécanisme** : le patch `tools/patch_mbedtls.py` force `mbedtls_ssl_conf_max_frag_len(..., MBEDTLS_SSL_MAX_FRAG_LEN_4096)` dans `ssl_client.cpp` du framework Arduino-ESP32. Cela négocie avec le serveur des records de 4KB max, et les buffers internes passent à 4KB chacun (8KB total).
 
-**Risque** : si le serveur envoie un record TLS > 8K, la connexion est fermée. À ce jour, `www.ladepeche.fr` n'en envoie pas.
+**Risque** : si le serveur envoie un record TLS > 4K, la connexion est fermée. À ce jour, `www.ladepeche.fr` n'en envoie pas.
 
 ### 4. `WiFiClientSecure` local (stack) peut échouer alors que `HTTPClient` réussit
 Le test `WiFiClientSecure::connect(host, port)` direct peut retourner `false` dans des conditions où `HTTPClient::begin(client, url) + GET()` réussit (même `maxBlock`, même heap). `HTTPClient` configure probablement des paramètres additionnels (SNI, timeout socket, etc.).
