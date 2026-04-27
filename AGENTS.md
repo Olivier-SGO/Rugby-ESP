@@ -188,6 +188,7 @@ Les commentaires de code et la documentation technique sont principalement en **
 5. **Accents** : `TeamData.h::stripAccents` utilise des `char` literals (`'e'`), pas des string literals (`"e"`) — sinon erreur de compilation `-fpermissive`.
 6. **SVG** : Pillow ne supporte pas SVG nativement. Utiliser `cairosvg` + cairo (Homebrew) pour les logos comme Ulster.
 7. **Logos .bin** sont gitignorés (`*.bin`, `data/logos/`) — régénérer avec `python3 tools/convert_logos.py` après un clone.
+8. **Patch TLS obligatoire** : `tools/patch_mbedtls.py` (exécuté automatiquement via `extra_scripts` dans `platformio.ini`) force `max_frag_len=4096` dans `ssl_client.cpp` du framework Arduino-ESP32. Sans ce patch, les buffers TLS restent à 16KB×2 = 32KB et les handshakes HTTPS échouent par manque de heap (maxBlock < 45K). Le script est idempotent — il ne modifie le fichier que si le patch n'est pas déjà présent.
 
 ---
 
