@@ -33,7 +33,7 @@ La documentation de conception complète se trouve dans `docs/superpowers/specs/
 |---|---|
 | `mrfaptastic/ESP32 HUB75 LED MATRIX PANEL DMA Display` | Pilote DMA des panneaux LED |
 | `adafruit/Adafruit GFX Library` | Primitives graphiques et fonts |
-| `bblanchon/ArduinoJson@^7.0.0` | Parsing JSON (WorldRugby fallback) |
+| `bblanchon/ArduinoJson@^7.0.0` | Parsing JSON (OTA version.json, config WiFi) |
 | `mathieucarbou/ESP Async WebServer` | Serveur web non-bloquant |
 | `mathieucarbou/AsyncTCP` | TCP asynchrone pour le webserver |
 | `paulstoffregen/Time` | Utilitaires temps |
@@ -134,9 +134,9 @@ Le boot séquentiel libère la RAM avant `Display.begin()` :
 include/
   config.h              # Constantes HW : pins HUB75, résolution, timings, couleurs RGB565
   MatchData.h           # Structs partagées : MatchData, StandingEntry, CompetitionData
-  TeamData.h            # Table de mapping 45 clubs (Idalgo/WorldRugby/LNR → canonique/abbrev/slug)
+  TeamData.h            # Table de mapping 45 clubs (Idalgo → canonique/abbrev/slug)
   DisplayPrefs.h        # Structs et helpers NVS pour les préférences d'affichage
-  credentials.h         # WIFI_SSID / WIFI_PASSWORD — gitignoré, créé manuellement
+
   fonts/                # Headers GFX générés (Atkinson Hyperlegible)
 
 src/
@@ -144,8 +144,6 @@ src/
   data/
     DataFetcher.cpp/h   # Orchestration Core 0 : WiFi, NTP, fetch périodique, OTA
     IdalgoParser.cpp/h  # Parsing stream HTML ladepeche.fr (~300KB en chunks 4KB)
-    WorldRugbyAPI.cpp/h # Fallback JSON fixtures
-    LNRParser.cpp/h     # Parsing classement lnr.fr (fix <template → <div)
     MatchDB.cpp/h       # Stockage RAM + persistance JSON LittleFS, protégé par mutex
   display/
     DisplayManager.cpp/h# Wrapper HUB75 DMA, double buffer RGB332→RGB565, text shadow
@@ -202,8 +200,8 @@ Les commentaires de code et la documentation technique sont principalement en **
 ### Priorité
 
 1. **Idalgo (ladepeche.fr)** — résultats, live, fixtures. ~300KB HTML, parsing stream.
-2. **WorldRugby PulseLive** — fixtures fallback uniquement. ~12 min de délai live.
-3. **LNR (lnr.fr)** — classements Top 14 + Pro D2 uniquement.
+2. **WorldRugby PulseLive** — *code présent mais inactif*. Fallback fixtures potentiel.
+3. **LNR (lnr.fr)** — *code présent mais inactif*. Classements Top 14 + Pro D2 potentiels.
 
 ### Gotchas par source
 
@@ -212,13 +210,7 @@ Les commentaires de code et la documentation technique sont principalement en **
 - `data-status` : `"0"`=prévu, `"1"`/"3"`=terminé, `"7"`=live, `"2"`=traiter comme live
 - Journées futures : détecter la transition décroissant→croissant dans les liens `journee-{n}`
 
-**WorldRugby :**
-- `startDate == endDate` → HTTP 400. Toujours utiliser `today-1` à `today+1`.
-- Kickoff TBD : `00:00:00 UTC` → en heure Paris ≤ 02:00 → ne pas afficher l'heure
-
-**LNR :**
-- Le tableau est dans un slot Vue `<template #first-tab>` — remplacer `<template` par `<div` avant parsing
-- La SPA envoie ~200KB de JS avant les données. Stall timeout **25s** (pas 12s), max bytes **600KB**.
+> **Note** : les parsers WorldRugby et LNR existent dans le code historique mais ne sont pas appelés dans la version actuelle. Toutes les données proviennent d'Idalgo.
 
 ---
 
@@ -271,16 +263,11 @@ Page HTML servie depuis LittleFS (`data/index.html`).
 
 ---
 
-## WiFi et credentials
+## WiFi
 
-Créer `include/credentials.h` (gitigné) :
-```cpp
-#pragma once
-#define WIFI_SSID     "MonReseau"
-#define WIFI_PASSWORD "MonMotDePasse"
-```
+**Configuration** : entièrement via la Web UI (mode point d'accès `RugbyDisplay-Setup`). Aucun fichier `credentials.h` n'est nécessaire.
 
-Au premier boot, les credentials sont stockés en NVS (`Preferences`) et la carte se reconnecte automatiquement par la suite. Modifiables via la Web UI.
+Au premier boot, si aucun réseau n'est enregistré, la carte démarre un AP avec portail captif. Les credentials saisis sont stockés en **NVS** (`Preferences`) — persistant aux redémarrages et aux mises à jour OTA. Modifiables via la Web UI à tout moment.
 
 Resilience WiFi : event handler sur `WIFI_EVENT_STA_DISCONNECTED` → `WiFi.reconnect()` avec backoff exponentiel.
 
@@ -345,7 +332,7 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 
 ## Sécurité
 
-- TLS/HTTPS utilisé pour toutes les sources de données (ladepeche.fr, lnr.fr, WorldRugby). En production, utiliser `ESP_CERTS_TLS_BUNDLE`. En développement/test, le client peut être en mode insecure.
+- TLS/HTTPS utilisé pour Idalgo (ladepeche.fr). En production, utiliser `ESP_CERTS_TLS_BUNDLE`. En développement/test, le client est en mode insecure (`setInsecure()`).
 - Credentials WiFi en NVS, pas en code source (après le premier boot).
 - Web UI exposée sur le réseau local uniquement (pas d'authentification — usage domestique).
 
