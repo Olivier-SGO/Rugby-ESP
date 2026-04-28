@@ -44,9 +44,9 @@
    [MatchDB]          [HUB75 DMA]
 ```
 
-- **Core 0** — Fetch HTTP, parsing HTML/JSON, NTP, OTA (stack 20KB)
-- **Core 1** — Rendu 60fps DMA HUB75 (stack 4KB)
-- **Renderer suspendu pendant TLS** — évite la fragmentation heap
+- **Core 0** — Fetch HTTP, parsing HTML/JSON, NTP, OTA (stack 16KB)
+- **Core 1** — Rendu 30fps DMA HUB75 (stack 10KB)
+- **Client TLS frais par requête** — évite la corruption mbedtls
 
 ### Partition Flash
 
@@ -91,6 +91,46 @@ pio run -e matrixportal_s3 --target uploadfs
 ```
 
 > **Note** : Fermer le moniteur série avant le flash. Sur MatrixPortal S3, double-cliquez RESET si le flash échoue.
+
+---
+
+## 📱 Première utilisation
+
+### 1. Branchez la carte
+Alimentez la MatrixPortal S3 via USB-C. La LED onboard indique l'état :
+| Couleur | État |
+|---|---|
+| 🔵 **Bleu** | Boot en cours |
+| 🔷 **Cyan** | Fetch des données rugby |
+| 🟢 **Vert** | Affichage actif |
+| 🔴 **Rouge clignotant** | Erreur critique (PSRAM manquante ou échec Display.begin) |
+
+### 2. Configuration WiFi (premier boot)
+Si aucun réseau WiFi n'est configuré, la carte bascule automatiquement en **mode point d'accès** :
+1. Sur votre téléphone ou ordinateur, connectez-vous au réseau **`RugbyDisplay-Setup`**
+2. Un portail captif s'ouvre automatiquement (ou allez sur `http://192.168.4.1`)
+3. Saisissez le **SSID** et le **mot de passe** de votre réseau WiFi
+4. La carte sauvegarde les credentials en mémoire permanente (NVS) et redémarre
+
+> 💡 **Astuce** : Si le portail ne s'ouvre pas, désactivez la connexion mobile (4G/5G) sur votre téléphone.
+
+### 3. Web UI
+Une fois connectée au WiFi, accédez à la configuration :
+- **Adresse** : `http://rugby-display.local` (mDNS) ou l'IP affichée dans les logs série
+
+**Paramètres disponibles** :
+- 🏉 **Compétitions** — activer/désactiver Top 14, Pro D2, Champions Cup
+- 💡 **Luminosité** — réglage de 0 à 255
+- 🔄 **Mise à jour OTA** — activer/désactiver la mise à jour automatique
+- ⏭️ **Scène suivante** — forcer manuellement le changement de scène
+
+### 4. Affichage
+L'écran alterne automatiquement entre les scènes (rotation toutes les ~10s) :
+- **Scoreboard** — scores live avec minute de jeu et logos 64×64
+- **Fixtures** — prochains matchs avec date et heure de kickoff
+- **Classements** — scroll vertical avec zones playoffs (🟡 or) et relégation (🔴 rouge)
+
+**Priorité live** : dès qu'un match est en cours, le scoreboard live remplace temporairement la rotation.
 
 ---
 
