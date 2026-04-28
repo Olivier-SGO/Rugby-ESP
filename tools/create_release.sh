@@ -16,9 +16,16 @@ fi
 
 echo "Building release for firmware version: $FW_VERSION"
 
+# Detect pio binary
+PIO=$(which pio 2>/dev/null || echo "$HOME/Library/Python/3.9/bin/pio")
+if [ ! -x "$PIO" ]; then
+    echo "ERROR: pio not found. Install PlatformIO or set PATH."
+    exit 1
+fi
+
 # Build firmware and filesystem image
-pio run -e matrixportal_s3
-pio run -e matrixportal_s3 --target buildfs
+$PIO run -e matrixportal_s3
+$PIO run -e matrixportal_s3 --target buildfs
 
 FIRMWARE=".pio/build/matrixportal_s3/firmware.bin"
 LITTLEFS=".pio/build/matrixportal_s3/littlefs.bin"
