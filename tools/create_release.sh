@@ -38,8 +38,8 @@ FS_SIZE=$(stat -f%z "$LITTLEFS" 2>/dev/null || stat -c%s "$LITTLEFS")
 cat > version.json <<EOF
 {
   "version": "$FW_VERSION",
-  "firmware_url": "https://github.com/Olivier-SGO/Rugby-ESP/releases/download/$VERSION/firmware.bin",
-  "littlefs_url": "https://github.com/Olivier-SGO/Rugby-ESP/releases/download/$VERSION/littlefs.bin",
+  "firmware_url": "https://github.com/Olivier-SGO/rugby-display-releases/releases/download/$VERSION/firmware.bin",
+  "littlefs_url": "https://github.com/Olivier-SGO/rugby-display-releases/releases/download/$VERSION/littlefs.bin",
   "firmware_size": $FW_SIZE,
   "littlefs_size": $FS_SIZE
 }
@@ -63,6 +63,7 @@ gh release create "$VERSION" \
     "$FIRMWARE" \
     "$LITTLEFS" \
     version.json \
+    --repo "Olivier-SGO/rugby-display-releases" \
     --title "Rugby ESP32 $VERSION" \
     --notes "Firmware version: $FW_VERSION"
 

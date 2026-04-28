@@ -16,7 +16,7 @@ size_t OTAUpdater::_littlefsSize      = 0;
 char   OTAUpdater::_lastError[64]     = {0};
 
 static constexpr const char* VERSION_URL =
-    "https://github.com/Olivier-SGO/Rugby-ESP/releases/latest/download/version.json";
+    "https://github.com/Olivier-SGO/rugby-display-releases/releases/latest/download/version.json";
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 void OTAUpdater::begin() {
