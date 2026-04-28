@@ -1,7 +1,7 @@
 #include "DataFetcher.h"
 #include "IdalgoParser.h"
+#include "WiFiManager.h"
 #include <WiFi.h>
-#include "credentials.h"
 #include "config.h"
 #include "DisplayPrefs.h"
 #include <Arduino.h>
@@ -40,19 +40,9 @@ void DataFetcher::connectWiFi() {
         _wifiOk = true;
         return;
     }
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.print("WiFi connecting");
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        Serial.print('.');
-    }
-    _wifiOk = (WiFi.status() == WL_CONNECTED);
-    Serial.println(_wifiOk ? " OK" : " FAILED");
-    if (!_wifiOk) Serial.printf("WiFi status: %d (SSID=%s)\n", WiFi.status(), WIFI_SSID);
+    _wifiOk = WiFiManager::connect();
+    Serial.println(_wifiOk ? "WiFi connected OK" : "WiFi connection FAILED");
+    if (!_wifiOk) Serial.printf("WiFi status: %d (SSID=%s)\n", WiFi.status(), WiFi.SSID().c_str());
     if (_wifiOk) {
         Serial.printf("WiFi IP: %s  GW: %s  DNS: %s\n",
                       WiFi.localIP().toString().c_str(),

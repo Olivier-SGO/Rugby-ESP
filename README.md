@@ -73,13 +73,6 @@
 git clone https://github.com/Olivier-SGO/Rugby-ESP.git
 cd Rugby-ESP
 
-# Créer les credentials WiFi
-cat > include/credentials.h <<EOF
-#pragma once
-#define WIFI_SSID     "MonReseau"
-#define WIFI_PASSWORD "MonMotDePasse"
-EOF
-
 # Compiler
 pio run -e matrixportal_s3
 
@@ -105,14 +98,19 @@ Alimentez la MatrixPortal S3 via USB-C. La LED onboard indique l'état :
 | 🟢 **Vert** | Affichage actif |
 | 🔴 **Rouge clignotant** | Erreur critique (PSRAM manquante ou échec Display.begin) |
 
-### 2. Configuration WiFi (premier boot)
-Si aucun réseau WiFi n'est configuré, la carte bascule automatiquement en **mode point d'accès** :
+### 2. Configuration WiFi (obligatoire au premier boot)
+**Aucun fichier `credentials.h` n'est nécessaire.** Le WiFi se configure entièrement via l'interface web.
+
+Si aucun réseau WiFi n'est enregistré, la carte bascule automatiquement en **mode point d'accès** :
 1. Sur votre téléphone ou ordinateur, connectez-vous au réseau **`RugbyDisplay-Setup`**
+   - Mot de passe du réseau : `rugby2024`
 2. Un portail captif s'ouvre automatiquement (ou allez sur `http://192.168.4.1`)
-3. Saisissez le **SSID** et le **mot de passe** de votre réseau WiFi
+3. Saisissez le **SSID** et le **mot de passe** de votre réseau WiFi domestique
 4. La carte sauvegarde les credentials en mémoire permanente (NVS) et redémarre
 
 > 💡 **Astuce** : Si le portail ne s'ouvre pas, désactivez la connexion mobile (4G/5G) sur votre téléphone.
+
+> 🔒 **Sécurité** : Les credentials WiFi sont stockés dans la mémoire flash interne de l'ESP32 (chiffrés par le SDK). Ils survivent aux redémarrages et aux mises à jour OTA.
 
 ### 3. Web UI
 Une fois connectée au WiFi, accédez à la configuration :

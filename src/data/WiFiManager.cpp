@@ -1,5 +1,4 @@
 #include "WiFiManager.h"
-#include "credentials.h"
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -74,14 +73,13 @@ bool WiFiManager::connect() {
 
     loadNetworks();
 
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
+
     if (count == 0) {
-        Serial.println("WiFiManager: no saved networks, using compile-time credentials");
-        WiFi.mode(WIFI_STA);
-        delay(200);  // let WiFi driver init before begin()
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-        bool ok = waitForConnect(30000);
-        Serial.println(ok ? "WiFi: connected (fallback)" : "WiFi: fallback failed");
-        return ok;
+        Serial.println("WiFiManager: no saved networks");
+        return false;
     }
 
     Serial.println("WiFiManager: scanning...");
@@ -113,7 +111,6 @@ bool WiFiManager::connect() {
         for (int j = 0; j < count; j++) {
             if (strcmp(scannedSsid, nets[j].ssid) == 0) {
                 Serial.printf("WiFi: trying %s (%d dBm)\n", nets[j].ssid, rssi);
-                WiFi.mode(WIFI_STA);
                 delay(200);
                 WiFi.begin(nets[j].ssid, nets[j].password);
                 if (waitForConnect(20000)) {

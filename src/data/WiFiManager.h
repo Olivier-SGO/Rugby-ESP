@@ -5,7 +5,7 @@ class WiFiManager {
 public:
     // Try to connect to the best known network.
     // Scans, sorts by RSSI, tries each known SSID until one succeeds.
-    // Falls back to compile-time credentials.h if /wifi.json is absent.
+    // Returns false if no networks are saved (use startAP() for configuration).
     static bool connect();
 
     // Load network list from /wifi.json into internal cache.
