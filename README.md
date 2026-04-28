@@ -184,8 +184,8 @@ Accessible sur `http://rugby-display.local` (mDNS) ou par IP.
 | Source | Données | Priorité |
 |---|---|---|
 | **Idalgo** (ladepeche.fr) | Résultats, live, fixtures, classements | 1 |
-| **LNR** (lnr.fr) | Classements *(code présent mais inactif)* | — |
-| **WorldRugby PulseLive** | Fixtures fallback *(code présent mais inactif)* | — |
+
+> **Note** : les parsers LNR (lnr.fr) et WorldRugby PulseLive sont présents dans le code source mais **non utilisés** dans la version actuelle. Toutes les données (résultats, fixtures, classements) proviennent d'Idalgo.
 
 ---
 
