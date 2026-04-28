@@ -37,14 +37,14 @@
 ┌─────────────┐     ┌─────────────┐
 │   Core 0    │     │   Core 1    │
 │ DataFetcher │────▶│  Renderer   │
-│  (WiFi/HTTP)│     │  (60fps)    │
+│  (WiFi/HTTP)│     │  (30fps)    │
 └─────────────┘     └─────────────┘
        │                    │
        ▼                    ▼
    [MatchDB]          [HUB75 DMA]
 ```
 
-- **Core 0** — Fetch HTTP, parsing HTML/JSON, NTP, OTA (stack 16KB)
+- **Core 0** — Fetch HTTP, parsing HTML/JSON, NTP, OTA (stack 20KB)
 - **Core 1** — Rendu 30fps DMA HUB75 (stack 10KB)
 - **Client TLS frais par requête** — évite la corruption mbedtls
 
@@ -154,7 +154,7 @@ Uploader un `.bin` directement depuis la Web UI :
 bash tools/create_release.sh v1.2.0
 ```
 
-Le script compile, génère `version.json`, et pousse les assets sur GitHub.
+Le script compile, génère `version.json`, et pousse les assets sur le repo public [**rugby-display-releases**](https://github.com/Olivier-SGO/rugby-display-releases). Le code source reste privé sur ce repo.
 
 ---
 
@@ -171,6 +171,7 @@ Accessible sur `http://rugby-display.local` (mDNS) ou par IP.
 | `/wifi` | GET/POST | Réseaux WiFi configurés |
 | `/scan` | GET | Scan des réseaux disponibles |
 | `/update/status` | GET | État OTA |
+| `/update/check` | POST | Vérifier si une mise à jour est disponible |
 | `/update/auto` | POST | Activer/désactiver auto-update |
 | `/update/apply` | POST | Lancer la mise à jour |
 | `/update/firmware` | POST | Upload manuel firmware |
@@ -183,8 +184,8 @@ Accessible sur `http://rugby-display.local` (mDNS) ou par IP.
 | Source | Données | Priorité |
 |---|---|---|
 | **Idalgo** (ladepeche.fr) | Résultats, live, fixtures, classements | 1 |
-| **LNR** (lnr.fr) | Classements Top 14 & Pro D2 | 2 |
-| **WorldRugby PulseLive** | Fixtures fallback | 3 |
+| **LNR** (lnr.fr) | Classements *(code présent mais inactif)* | — |
+| **WorldRugby PulseLive** | Fixtures fallback *(code présent mais inactif)* | — |
 
 ---
 
@@ -201,18 +202,23 @@ include/
 src/
   main.cpp              # setup(), loop(), tâches FreeRTOS
   data/
-    DataFetcher.cpp/h   # Orchestration WiFi/HTTP/NTP
-    IdalgoParser.cpp/h  # Scraping HTML ladepeche.fr
-    WorldRugbyAPI.cpp/h # Fallback JSON
-    LNRParser.cpp/h     # Classements LNR
-    MatchDB.cpp/h       # Stockage RAM + persistance
-    OTAUpdater.cpp/h    # Mise à jour OTA
+    DataFetcher.cpp/h       # Orchestration WiFi/HTTP/NTP
+    IdalgoParser.cpp/h      # Scraping HTML ladepeche.fr
+    WorldRugbyAPI.cpp/h     # Fallback JSON (inactif)
+    MatchDB.cpp/h           # Stockage RAM + persistance
+    MatchRecord.cpp/h       # Enregistrement historique des matchs
+    WiFiManager.cpp/h       # Gestion WiFi + mode AP
+    OTAUpdater.cpp/h        # Mise à jour OTA
+    WiFiClientSecureSmall.h # Client TLS avec buffers 4K
   display/
-    DisplayManager.cpp/h# Pilote HUB75 DMA
-    SceneManager.cpp/h  # Rotation des scènes
+    DisplayManager.cpp/h  # Pilote HUB75 DMA
+    SceneManager.cpp/h    # Rotation des scènes
     ScoreboardScene.cpp/h
     FixturesScene.cpp/h
     StandingsScene.cpp/h
+    LogoLoader.cpp/h      # Chargement .bin RGB565 depuis LittleFS
+    LogoCache.cpp/h       # Cache logos en PSRAM
+    CompLogos.cpp/h       # Buffers statiques pour logos compétition
   web/
     WebUI.cpp/h         # Serveur web synchrone
 
