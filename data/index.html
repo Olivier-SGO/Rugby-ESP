@@ -104,7 +104,6 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
   <div class="sub-checks" id="sub-cc">
     <label><input type="checkbox" id="sc-cc" onchange="savePrefs()"> Resultats</label>
     <label><input type="checkbox" id="fx-cc" onchange="savePrefs()"> Prochains matches</label>
-    <label><input type="checkbox" id="st-cc" onchange="savePrefs()"> Classement</label>
   </div>
 </div>
 
@@ -238,7 +237,8 @@ async function loadPrefs() {
       cb(`en-${k}`).checked = p.enabled  !== false;
       cb(`sc-${k}`).checked = p.scores   !== false;
       cb(`fx-${k}`).checked = p.fixtures !== false;
-      cb(`st-${k}`).checked = p.standings!== false;
+      const stEl = cb(`st-${k}`);
+      if (stEl) stEl.checked = p.standings !== false;
       updateSubState(k);
     }
     if (d.score_s    != null) cb('score_s').value    = d.score_s;
@@ -274,7 +274,7 @@ async function doSavePrefs() {
       enabled:   cb(`en-${k}`).checked,
       scores:    cb(`sc-${k}`).checked,
       fixtures:  cb(`fx-${k}`).checked,
-      standings: cb(`st-${k}`).checked,
+      standings: cb(`st-${k}`) ? cb(`st-${k}`).checked : false,
     };
   }
   body.score_s    = parseInt(cb('score_s').value)    || 8;
