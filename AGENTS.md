@@ -559,11 +559,37 @@ Sans ces optimisations cumulatives, même une réserve de 48K ne suffit pas à g
 
 **Fix** : seuil `getFreeHeap() < 50000` pour `checkForUpdate()`, `< 40000` pour `applyUpdate()`, `< 30000` pour `_flashFromURL()`.
 
+**Risque #6 — Timeout HTTPClient trop court pour gros fichiers** : `HTTPClient.setTimeout(30000)` limite la requête complète à 30s. Pour un firmware de 1.2MB à ~10KB/s sur TLS, le téléchargement prend ~120s. HTTPClient ferme la connexion au bout de 30s, le stream stalle, et la boucle de lecture déclenche son propre timeout.
+
+**Fix** : passer `http.setTimeout(60000)` (max `uint16_t` de l'API) et augmenter le timeout inter-chunks de 30s à **120s**.
+
+**Risque #7 — `DataFetcher` concurrent pendant le download** : la tâche `DataFetcher` (Core 0) se réveille toutes les 5s et peut lancer `fetchRotating()` pendant que `applyUpdate()` télécharge. Cela consomme du heap et perturbe le stream TCP.
+
+**Fix** : ajouter un flag global `gOTADownloading` que `DataFetcher::loop()` vérifie. Si true, le fetch est skipé avec log `[FETCH] OTA download in progress, skipping fetch`.
+
 **Règle OTA** :
-- Toujours utiliser `WiFiClientSecureSmall` pour les requêtes OTA (même vers GitHub — cohérence + max_frag_len).
+- Toujours utiliser `WiFiClientSecure` standard (pas `Small`) pour les requêtes OTA avec redirections multiples — évite la réutilisation du client TLS corrompu entre redirects.
 - Toujours libérer la réserve TLS 48K avant tout handshake OTA.
 - Toujours allouer les buffers de téléchargement >1K en PSRAM.
 - Toujours vérifier le heap avant chaque étape (`checkForUpdate` → `Update.begin` → `_flashFromURL`).
+- Toujours bloquer les tâches concurrentes (`DataFetcher`) pendant le download.
+
+### 11. Validation hardware — OTA v1.3.1 → v1.3.2 réussie (2026-04-29)
+
+**Historique** : toutes les versions ≤ v1.3.0 échouaient systématiquement en OTA avec `HTTP -1` ou `Read timeout` à ~146KB/1287968 bytes.
+
+**Fixs cumulatifs appliqués dans v1.3.1** :
+- Libération de la réserve TLS 48K avant `checkForUpdate()` au boot
+- `WiFiClientSecure` standard (pas Small) pour éviter la corruption TLS sur redirects GitHub
+- Buffer de téléchargement `_flashFromURL` en PSRAM (4096 bytes)
+- Flag `_busy` dans `OTAUpdater` pour éviter les appels simultanés
+- Flag `gOTADownloading` pour bloquer `DataFetcher` pendant le download
+- Timeouts HTTPClient 60s + inter-chunks 120s
+- Seuils heap alignés sur le fetch Idalgo (50K/40K/40K)
+
+**Résultat** : transition **v1.3.1 → v1.3.2** réussie en OTA automatique sur hardware MatrixPortal S3. Firmware 1.2MB + LittleFS 4MB téléchargés et flashés sans erreur, reboot OK.
+
+> **Note** : les versions ≤ v1.3.0 ne peuvent PAS bénéficier de ces corrections par OTA (elles ont le bug). Il faut flasher manuellement v1.3.1+ pour récupérer l'OTA stable.
 
 ---
 
