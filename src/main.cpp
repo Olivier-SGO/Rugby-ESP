@@ -49,10 +49,11 @@ static void hwTest() {
         delay(500);
     }
     Display.fillScreen(C_BLACK);
-    Display.drawText(4, 20, "HUB75 OK  256x64", 0xFFFF, nullptr);
-    Display.drawText(4, 36, "R  G  B  W  OK",   0x07E0, nullptr);
+    Display.drawText(4, 16, "HUB75 OK  256x64", 0xFFFF, nullptr);
+    Display.drawText(4, 32, "FW v" FIRMWARE_VERSION, 0x07E0, nullptr);
+    Display.drawText(4, 48, "R  G  B  W  OK",   0xFFFF, nullptr);
     Display.flip();
-    delay(1000);
+    delay(1500);
 }
 
 TaskHandle_t rendererHandle = nullptr;
