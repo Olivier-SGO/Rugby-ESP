@@ -536,8 +536,15 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
                 keep = false;
             }
         } else {
-            // Knockout finals: only keep the most advanced phase
-            keep = (knockoutOrder(temp[i].group) == maxKnockoutPhase);
+            // Knockout finals: keep the most advanced phase, but also keep
+            // matches with unrecognized/empty group to avoid losing data
+            // when the HTML format changes or omits the phase label.
+            int order = knockoutOrder(temp[i].group);
+            if (maxKnockoutPhase == 0) {
+                keep = true; // no recognizable finals found — keep all non-pool
+            } else {
+                keep = (order == maxKnockoutPhase) || (order == 0);
+            }
         }
         if (!keep) continue;
 
