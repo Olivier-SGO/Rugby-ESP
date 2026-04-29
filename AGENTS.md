@@ -83,9 +83,11 @@ bash tools/gen_fonts.sh                 # régénère les headers de fonts dans 
 
 | Cœur | Tâche | Stack | Priorité | Rôle |
 |------|-------|-------|----------|------|
-| Core 0 | `DataFetcher` | 16KB | 1 | Fetch HTTP, parsing HTML/JSON, NTP, WiFi |
-| Core 1 | `DisplayRenderer` | 8KB | 2 | Rendu 30fps DMA HUB75 |
+| Core 0 | `DataFetcher` | 8KB | 1 | Fetch HTTP, parsing HTML/JSON, NTP, WiFi |
+| Core 1 | `DisplayRenderer` | 6KB | 2 | Rendu 30fps DMA HUB75 |
 | Core 1 | `SceneManager` | (même tâche) | — | Rotation des scènes, live-priority |
+
+> **Validation (v1.3.0, 2026-04-29)** : high-water marks stables — DataFetcher 6632/8192, Renderer 4028/6144, BootFetch 8228/12288. Les valeurs originales (16K/10K/20K) étaient surdimensionnées et consommaient du heap SRAM précieux.
 
 **Contrainte hardware** : le pilote DMA HUB75 est sensible aux interruptions. **Aucun appel réseau sur Core 1.** Le renderer ne doit jamais prendre de mutex plus que ~1ms.
 
@@ -102,7 +104,7 @@ bash tools/gen_fonts.sh                 # régénère les headers de fonts dans 
 | Back buffer | 16KB | SRAM | RGB332 (1 byte/pixel), 256×64 |
 | Logos grands | 16KB max | SRAM | 2 slots × 64×64 RGB565 chargés depuis LittleFS à la demande |
 | Logos mini | 512 bytes | SRAM | 16×16 RGB565 (Standings) |
-| Logos compétition | ~5.6KB | SRAM | Buffers statiques `gCompLogoLg` (56×20) et `gCompLogoSm` (32×12) |
+| Logos compétition | ~5.6KB | **PSRAM** | Buffers `gCompLogoLg`/`gCompLogoSm` alloués via `heap_caps_malloc(MALLOC_CAP_SPIRAM)` (v1.3.0) |
 | HTML page buffer | 512KB | PSRAM | Buffer de lecture stream (cap=524288) |
 | CompetitionData | ~4.3KB × 3 | PSRAM | `top14`, `prod2`, `cc` alloués avec `MALLOC_CAP_SPIRAM` |
 | ArduinoJson pool | variable | PSRAM | Allocateur custom `SpiRamAllocator` |
@@ -186,7 +188,7 @@ Les commentaires de code et la documentation technique sont principalement en **
 
 1. **Ne jamais appeler `Display.end()/begin()` après le boot** — cela re-malloc les buffers DMA dans un heap fragmenté et provoque une corruption (Bug 11).
 2. **`vTaskSuspend(rendererHandle)` requis** avant toute écriture directe sur l'affichage dans `loop()` — le renderer (Core 1, prio 2) préempte `loop()` (prio 1) en moins de 33ms (Bug 12).
-3. **Stack size des tâches** : `DataFetcher` 16KB (HTTP/TLS/JSON), `BootFetch` 20KB, `Renderer` 10KB. Le défaut FreeRTOS (2KB) crashe silencieusement.
+3. **Stack size des tâches** : `DataFetcher` 8192, `BootFetch` 12288, `Renderer` 6144. Le défaut FreeRTOS (2KB) crashe silencieusement. Les stacks originales (16K/20K/10K) étaient surdimensionnées ; les valeurs réduites ont libéré ~14KB de SRAM contiguë tout en restant sûres (high-water > 1500 bytes de marge).
 4. **WDT** : utiliser `esp_task_wdt_init(timeout_s, true)` — `esp_task_wdt_config_t` / `esp_task_wdt_reconfigure` n'existent pas dans le framework Arduino ESP32 3.x.
 5. **Accents** : `TeamData.h::stripAccents` utilise des `char` literals (`'e'`), pas des string literals (`"e"`) — sinon erreur de compilation `-fpermissive`.
 6. **SVG** : Pillow ne supporte pas SVG nativement. Utiliser `cairosvg` + cairo (Homebrew) pour les logos comme Ulster.
@@ -306,6 +308,20 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 - **Cause** : `begin()` contenait `if (_panel) end();` qui libérait et ré-allouait les buffers DMA dans un heap déjà fragmenté (documenté comme Bug 11 dans les specs d'origine).
 - **Fix** : Remplacé par un warning log + early return. `begin()` ne doit être appelé qu'une seule fois au boot.
 
+### Bug 15 — Handshake TLS systématique en HTTP -1 après boot (2026-04-29)
+- **Symptôme** : Après `Display.begin()` et création des tâches, tous les fetches HTTPS échouent avec `HTTP -1` (`HTTPC_ERROR_CONNECTION_REFUSED`). `maxAllocHeap` affichait ~47K pourtant supérieur au seuil théorique de 32K (buffers TLS 16K×2).
+- **Cause** : le SDK ESP32 précompilé fixe `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=16384` et désactive `VARIABLE_BUFFER_LENGTH`. Les buffers TLS internes (input + output) font donc **16KB chacun = 32KB minimum**, et le handshake ajoute des structures de session + certificats qui portent l'empreinte totale à **~45–55KB contigus**. `max_frag_len=4096` négocie des records plus petits avec le serveur mais **ne réduit pas la taille des buffers I/O internes**. Avec un `maxBlock` de 47K et un heap déjà fragmenté par les stacks et les objets statiques, l'allocation TLS échoue.
+- **Fix** : **combinaison cumulative** de toutes les optimisations suivantes — aucune seule ne suffisait :
+  1. **Réserve TLS 48KB** (`malloc` placébo) : alloué au début de `setup()`, libéré juste avant chaque handshake, ré-alloué après. Protège un bloc contigu de 48K.
+  2. **Stacks FreeRTOS réduites** : DataFetcher 8192 (was 16384), Renderer 6144 (was 10240), BootFetch 12288 (was 20480). Libère ~14KB de SRAM.
+  3. **`CompLogos` en PSRAM** : `gCompLogoLg`/`gCompLogoSm` alloués via `heap_caps_malloc(MALLOC_CAP_SPIRAM)`. Libère ~11KB de SRAM.
+  4. **`SceneManager` buffers en PSRAM** : `liveBuf`/`nonliveBuf`/`sortedBuf` déplacés de BSS statique à PSRAM. Libère ~5KB de SRAM.
+  5. **`getMaxAllocHeap()` retiré du chemin fetch** : évite les crashs `LoadProhibited` pendant le parsing (Leçon 8).
+  6. **3 fetches au boot** (pas 5) : suppression de `fetchNextJournee` du boot — les fixtures N+1 sont récupérées dans les cycles `fetchRotating()`.
+  7. **`WiFiClientSecureSmall`** avec `max_frag_len=4096` — négocie des records 4K avec le serveur (évite la fermeture de connexion côté serveur).
+  8. **`esp_sntp_stop()` avant fetch** — libère les sockets UDP et évite la corruption LWIP pendant le TLS.
+- **Validation** : `maxBlock=83956` au moment du fetch. Trois handshakes successifs (CC calendar → Top14 → ProD2) réussissent. Pages de 340K–378K lues et parsées. 13 slots créés. High-water stacks stables (Renderer 4028/6144, DataFetcher 6632/8192, BootFetch 8228/12288).
+
 ---
 
 ## Tests et validation
@@ -351,28 +367,33 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 
 ## 🔥 Leçons critiques de debugging (2026-04-27)
 
-### 1. Le handshake TLS consomme beaucoup de heap SRAM
-Chaque `WiFiClientSecure` handshake alloue deux buffers TLS (input + output). Avec la configuration par défaut du SDK ESP32, ces buffers font 16KB chacun = **32KB total**. Sur un heap déjà fragmenté, ces 32KB ne trouvent pas de bloc contigu et le handshake échoue (`HTTP -1`).
+### 1. Le handshake TLS consomme beaucoup de heap SRAM — les buffers internes restent à 16KB×2
+Chaque `WiFiClientSecure` handshake alloue deux buffers TLS (input + output). Avec la configuration **précompilée du SDK ESP32**, `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=16384` et `VARIABLE_BUFFER_LENGTH` est désactivé. Les buffers font donc **16KB chacun = 32KB minimum**, plus les structures de session et de certificats → empreinte totale **~45–55KB contigus**.
 
-**Solution** : le patch `tools/patch_mbedtls.py` (exécuté automatiquement via `extra_scripts`) force `max_frag_len=4096` dans `ssl_client.cpp`. Les buffers TLS passent à **4KB chacun = 8KB total**, ce qui passe dans un bloc de 35-40K.
+**Le patch `max_frag_len=4096`** (via `tools/patch_mbedtls.py`) force `mbedtls_ssl_conf_max_frag_len()` dans `ssl_client.cpp`. Cela négocie avec le serveur des records TLS de 4KB max, ce qui évite que le serveur ferme la connexion. Mais **ce patch ne réduit PAS la taille des buffers I/O internes** alloués par `mbedtls_ssl_setup()`. Les buffers restent à 16KB chacun.
 
-Avec ce patch + client frais par requête (buffers libérés entre chaque requête), les 4 requêtes d'un cycle de fetch (CC + Top14 + nextJournee + ProD2) passent sans problème.
+**Conséquence** : le seul moyen de réussir le handshake est d'avoir un bloc contigu de **≥ 50KB** dans le heap SRAM au moment du fetch. Sur un ESP32-S3 avec 320KB SRAM, après `Display.begin()` (16K DMA) + stacks + objets statiques, ce seuil est difficile à atteindre sans optimisation agressive.
 
-### 2. Seuil critique de `maxAllocHeap` pour handshake TLS
-| `maxAllocHeap` | Résultat |
+### 2. Seuil critique de `maxAllocHeap` pour handshake TLS — valeurs corrigées
+| `maxBlock` au moment du fetch | Résultat |
 |---|---|
-| ≥ 45K | Handshake quasi-certain |
-| 35-40K | Aléatoire / dépend de la fragmentation exacte |
-| < 35K | Échec systématique (`HTTP -1`) |
+| ≥ 80K | Handshake quasi-certain (3 requêtes successives validées) |
+| 60–75K | Probablement OK pour 1–2 requêtes |
+| 45–55K | Échec systématique — insuffisant pour buffers 16K×2 + overhead session/cert |
+| < 45K | Échec garanti |
 
-**Action** : logger `maxAllocHeap` avant chaque fetch. Si < 40K, ne pas tenter de nouveau handshake.
+**Expérience v1.3.0** : avec `maxBlock=83956`, 3 handshakes successifs + parsing de pages 340K–378K ont réussi. Avec `maxBlock=47092` (même firmware mais sans réserve 48K et sans stacks réduites), tous les fetches échouaient en `HTTP -1`.
 
-### 3. `MBEDTLS_SSL_MAX_CONTENT_LEN=8192` dans `platformio.ini` ne suffit pas
-Cette définition est passée au compilateur, mais le SDK ESP32 la redéfinit à **16384** via `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN`. La librairie précompilée utilise donc 16KB par buffer (32KB total). Sur un heap fragmenté, ces 32KB ne trouvent pas de bloc contigu et le handshake échoue silencieusement.
+**Action** : ne PAS logger `getMaxAllocHeap()` pendant le fetch (risque de crash, voir Leçon 8). Logger `getFreeHeap()` et s'assurer qu'il reste > 50K avant le premier handshake.
 
-**Le vrai mécanisme** : le patch `tools/patch_mbedtls.py` force `mbedtls_ssl_conf_max_frag_len(..., MBEDTLS_SSL_MAX_FRAG_LEN_4096)` dans `ssl_client.cpp` du framework Arduino-ESP32. Cela négocie avec le serveur des records de 4KB max, et les buffers internes passent à 4KB chacun (8KB total).
+### 3. `MBEDTLS_SSL_MAX_CONTENT_LEN=8192` dans `platformio.ini` ne suffit pas — et le patch `max_frag_len` ne réduit pas les buffers internes
+Cette définition est passée au compilateur, mais le SDK ESP32 la redéfinit à **16384** via `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN` (warning "redefined" visible à la compilation). La librairie précompilée utilise donc **16KB par buffer** (input + output = **32KB total**).
 
-**Risque** : si le serveur envoie un record TLS > 4K, la connexion est fermée. À ce jour, `www.ladepeche.fr` n'en envoie pas.
+**Le patch `max_frag_len=4096`** (via `tools/patch_mbedtls.py`) force `mbedtls_ssl_conf_max_frag_len(..., MBEDTLS_SSL_MAX_FRAG_LEN_4096)` dans `ssl_client.cpp`. Cela négocie avec le serveur des records de **4KB max**, mais **ne réduit PAS la taille des buffers I/O internes** alloués par `mbedtls_ssl_setup()` — ces buffers restent à 16KB chacun car le SDK n'a pas `CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH` activé.
+
+**Conséquence** : chaque handshake TLS nécessite un bloc contigu de **~45–55KB** dans le heap SRAM (32K buffers + overhead session + certificats). Sur un heap fragmenté après `Display.begin()`, c'est le seuil critique. Le *malloc placébo* seul de 32K ne suffit pas — il faut une **combinaison** de réserve 48K + stacks réduites + gros objets en PSRAM pour atteindre ≥80K de `maxBlock`.
+
+**Risque du patch** : si le serveur envoie un record TLS > 4K, la connexion est fermée. À ce jour, `www.ladepeche.fr` n'en envoie pas.
 
 ### 4. `WiFiClientSecure` local (stack) peut échouer alors que `HTTPClient` réussit
 Le test `WiFiClientSecure::connect(host, port)` direct peut retourner `false` dans des conditions où `HTTPClient::begin(client, url) + GET()` réussit (même `maxBlock`, même heap). `HTTPClient` configure probablement des paramètres additionnels (SNI, timeout socket, etc.).
@@ -401,6 +422,51 @@ CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData),
 Après un handshake TLS + parsing d'une page de 378K, le heap est tellement fragmenté que `getMaxAllocHeap()` (qui parcourt les métadonnées du heap) peut lire des structures corrompues et causer un `LoadProhibited` / reboot.
 
 **Règle** : ne jamais appeler `ESP.getMaxAllocHeap()` dans les logs des fonctions de fetch/parsing. Utiliser `ESP.getFreeHeap()` uniquement, ou ne logger le heap qu'au niveau `fetchAll()` (entre les requêtes, pas à l'intérieur).
+
+> **Note (2026-04-29)** : cette règle est maintenant appliquée dans tout le codebase. `DataFetcher.cpp` et `OTAUpdater.cpp` n'utilisent plus `getMaxAllocHeap()` dans le chemin fetch. De plus, `fetchAll()` au boot ne fait plus de `fetchNextJournee` — les fixtures de la journée N+1 sont récupérées dans les cycles `fetchRotating()` ultérieurs, réduisant le nombre de handshakes TLS au boot de 5 à 3.
+
+### 9. `malloc` placébo — réserver un bloc contigu au boot pour le TLS (v1.3.0)
+
+**Problème** : après `Display.begin()` (buffers DMA) + `xTaskCreate` (stacks) + `LittleFS` + `Scenes.begin()`, le heap SRAM est fragmenté. Même avec 90–100 KB de `freeHeap`, le plus gros bloc contigu (`maxAllocHeap`) peut tomber sous les ~50K nécessaires au handshake TLS (16K input + 16K output buffers + overhead session/certificats), provoquant des échecs systématiques `HTTP -1`.
+
+**Solution** : allouer un bloc de **48 KB** via `malloc()` au tout début de `setup()` (quand le heap est vierge), le garder alloué pendant tout le boot pour protéger ce bloc, puis le libérer juste avant les handshakes TLS. Cela crée instantanément un trou propre de 48K dans le heap, garantissant que `WiFiClientSecure` trouve un bloc contigu pour ses buffers.
+
+```cpp
+// main.cpp — au tout début de setup(), avant Display.begin()
+static void* gTLSReserve = nullptr;
+// ...
+gTLSReserve = malloc(49168);  // 48KB + marge d'alignement
+```
+
+```cpp
+// DataFetcher.cpp
+void releaseTLSReserve() {
+    extern void* gTLSReserve;
+    if (gTLSReserve) { free(gTLSReserve); gTLSReserve = nullptr; }
+}
+void reclaimTLSReserve() {
+    extern void* gTLSReserve;
+    gTLSReserve = malloc(49168);
+}
+
+void DataFetcher::fetchAll() {
+    releaseTLSReserve();
+    // → handshake TLS ici, les buffers trouvent un bloc contigu
+    // ... fetch CC → Top14 → ProD2 ...
+    reclaimTLSReserve();
+}
+```
+
+**Pourquoi 48K et pas 32K** : en pratique, 32K de réserve donnaient un `maxBlock=47K` au moment du fetch — insuffisant. 48K donnent un `maxBlock=84K`, ce qui laisse ~36K de marge pour l'overhead session/certificats au-delà des 32K de buffers fixes.
+
+**⚠️ La réserve seule ne suffit pas.** Il faut la combiner avec :
+- Stacks FreeRTOS réduites (libère ~14K)
+- `CompLogos` en PSRAM (libère ~11K)
+- `SceneManager` buffers en PSRAM (libère ~5K)
+- Pas de `getMaxAllocHeap()` dans le fetch path
+- 3 fetches au boot maximum
+
+Sans ces optimisations cumulatives, même une réserve de 48K ne suffit pas à garantir `maxBlock ≥ 80K`.
 
 ---
 

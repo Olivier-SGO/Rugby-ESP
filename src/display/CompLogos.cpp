@@ -1,11 +1,12 @@
 #include "CompLogos.h"
 #include <LittleFS.h>
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 
 uint8_t  gCompLogoLgW[3] = {};
 uint8_t  gCompLogoSmW[3] = {};
-uint16_t gCompLogoLg[3][LOGO_COMP_MAX_W    * LOGO_COMP_H]    = {};
-uint16_t gCompLogoSm[3][LOGO_COMP_SM_MAX_W * LOGO_COMP_SM_H] = {};
+uint16_t* gCompLogoLg[3] = {nullptr, nullptr, nullptr};
+uint16_t* gCompLogoSm[3] = {nullptr, nullptr, nullptr};
 
 static const char* SLUGS[] = {"comp_top14", "comp_prod2", "comp_cc"};
 
@@ -28,8 +29,18 @@ static uint8_t loadBin(const char* slug, bool sm, uint16_t* buf,
 
 void loadCompLogos() {
     for (int i = 0; i < 3; i++) {
-        gCompLogoLgW[i] = loadBin(SLUGS[i], false, gCompLogoLg[i], LOGO_COMP_MAX_W,    LOGO_COMP_H);
-        gCompLogoSmW[i] = loadBin(SLUGS[i], true,  gCompLogoSm[i], LOGO_COMP_SM_MAX_W, LOGO_COMP_SM_H);
+        if (!gCompLogoLg[i]) {
+            gCompLogoLg[i] = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * LOGO_COMP_MAX_W * LOGO_COMP_H, MALLOC_CAP_SPIRAM);
+        }
+        if (!gCompLogoSm[i]) {
+            gCompLogoSm[i] = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * LOGO_COMP_SM_MAX_W * LOGO_COMP_SM_H, MALLOC_CAP_SPIRAM);
+        }
+        if (gCompLogoLg[i]) {
+            gCompLogoLgW[i] = loadBin(SLUGS[i], false, gCompLogoLg[i], LOGO_COMP_MAX_W, LOGO_COMP_H);
+        }
+        if (gCompLogoSm[i]) {
+            gCompLogoSmW[i] = loadBin(SLUGS[i], true,  gCompLogoSm[i], LOGO_COMP_SM_MAX_W, LOGO_COMP_SM_H);
+        }
     }
 }
 

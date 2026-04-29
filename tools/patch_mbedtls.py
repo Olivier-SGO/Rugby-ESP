@@ -14,6 +14,8 @@ import glob
 
 
 def patch_ssl_client(source, target, env):
+    # PATCH RE-ENABLED: esp_sntp_stop() fixes the fatal alert root cause
+    # (SNTP thread was corrupting lwIP state, not the max_frag_len extension)
     project_dir = env.subst("$PROJECT_DIR")
 
     # Search for ssl_client.cpp inside platformio packages (project-local or global)

@@ -1,6 +1,6 @@
 #pragma once
 #include "MatchData.h"
-#include "WiFiClientSecureSmall.h"
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
 class IdalgoParser {

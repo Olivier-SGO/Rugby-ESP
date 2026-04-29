@@ -7,8 +7,8 @@ extern uint8_t  gCompLogoLgW[3];
 extern uint8_t  gCompLogoSmW[3];
 
 // Pixel buffers — allocated for the maximum possible width
-extern uint16_t gCompLogoLg[3][LOGO_COMP_MAX_W * LOGO_COMP_H];
-extern uint16_t gCompLogoSm[3][LOGO_COMP_SM_MAX_W * LOGO_COMP_SM_H];
+extern uint16_t* gCompLogoLg[3];
+extern uint16_t* gCompLogoSm[3];
 
 void loadCompLogos();
 int  compIndex(const char* comp);  // 0=TOP14 1=PRO D2 2=CC

@@ -7,11 +7,32 @@
 #include <Arduino.h>
 #include <esp_heap_caps.h>
 
+extern uint8_t* gTLSReserve;
+
+static void releaseTLSReserve() {
+    if (gTLSReserve) {
+        free(gTLSReserve);
+        gTLSReserve = nullptr;
+        Serial.println("[HEAP] TLS reserve released for fetch");
+    }
+}
+
+static void reclaimTLSReserve() {
+    if (!gTLSReserve) {
+        gTLSReserve = (uint8_t*)malloc(49152);
+        if (gTLSReserve) {
+            Serial.println("[HEAP] TLS reserve reclaimed");
+        } else {
+            Serial.println("[HEAP] WARNING: failed to reclaim TLS reserve");
+        }
+    }
+}
+
 DataFetcher Fetcher;
 
 void DataFetcher::begin(MatchDB* db) {
     _db = db;
-    xTaskCreatePinnedToCore(taskFunc, "DataFetcher", 20480, this, 1, nullptr, 0);
+    xTaskCreatePinnedToCore(taskFunc, "DataFetcher", 8192, this, 1, nullptr, 0);
 }
 
 void DataFetcher::taskFunc(void* param) {
@@ -58,6 +79,8 @@ void DataFetcher::connectWiFi() {
     }
 }
 
+#include <esp_sntp.h>
+
 void DataFetcher::syncNTP() {
     static bool configured = false;
     if (!configured) {
@@ -76,6 +99,10 @@ void DataFetcher::syncNTP() {
     }
     _timeSynced = (now > 1000000000L);
     Serial.println(_timeSynced ? " OK" : " FAILED");
+    if (_timeSynced) {
+        esp_sntp_stop();  // Stop SNTP thread — its UDP socket corrupts subsequent TLS handshakes
+        Serial.println("[NTP] SNTP stopped to preserve TLS stability");
+    }
 }
 
 void DataFetcher::loop() {
@@ -94,7 +121,7 @@ void DataFetcher::loop() {
 
     uint32_t pollMs = _db->hasLive() ? POLL_LIVE_MS : POLL_NORMAL_MS;
     if (now - _lastIdalgo > pollMs || _lastIdalgo == 0) {
-        fetchAll();
+        fetchRotating();
         _lastIdalgo = now;
     }
     if (now - _lastNTP > NTP_INTERVAL_MS) {
@@ -103,11 +130,99 @@ void DataFetcher::loop() {
     }
 }
 
+void DataFetcher::fetchRotating() {
+    if (_rendererHandle) vTaskSuspend(_rendererHandle);
+
+    if (WiFi.status() != WL_CONNECTED) {
+        if (_rendererHandle) vTaskResume(_rendererHandle);
+        return;
+    }
+
+    releaseTLSReserve();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    if (ESP.getFreeHeap() < 50000) {
+        Serial.printf("[FETCH] freeHeap=%u < 50K, skipping fetchRotating\n", ESP.getFreeHeap());
+        if (_rendererHandle) vTaskResume(_rendererHandle);
+        return;
+    }
+
+    DisplayPrefs prefs;
+    loadDisplayPrefs(prefs);
+
+    IdalgoParser idalgo;
+
+    const char* top14Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats";
+    const char* prod2Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats";
+
+    bool fetched = false;
+    for (int attempts = 0; attempts < 3 && !fetched; attempts++) {
+        int idx = _fetchIndex % 3;
+        _fetchIndex = (idx + 1) % 3;
+
+        if (idx == 0 && prefs.comp[0].enabled) {
+            Serial.println("[FETCH] Rotating → Top14");
+            CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
+            if (d) {
+                memset(d, 0, sizeof(CompetitionData));
+                if (idalgo.fetch(top14Base, *d)) {
+                    fetchNextJournee(*d, top14Base, idalgo);
+                    _db->updateTop14(*d);
+                    fetched = true;
+                }
+                heap_caps_free(d);
+            }
+        } else if (idx == 1 && prefs.comp[1].enabled) {
+            Serial.println("[FETCH] Rotating → ProD2");
+            CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
+            if (d) {
+                memset(d, 0, sizeof(CompetitionData));
+                if (idalgo.fetch(prod2Base, *d)) {
+                    fetchNextJournee(*d, prod2Base, idalgo);
+                    _db->updateProd2(*d);
+                    fetched = true;
+                }
+                heap_caps_free(d);
+            }
+        } else if (idx == 2 && prefs.comp[2].enabled) {
+            Serial.println("[FETCH] Rotating → CC");
+            CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
+            if (d) {
+                memset(d, 0, sizeof(CompetitionData));
+                if (fetchCC(idalgo, *d)) {
+                    _db->updateCC(*d);
+                    fetched = true;
+                }
+                heap_caps_free(d);
+            }
+        }
+    }
+
+    if (fetched) {
+        _firstFetchDone = true;
+        Serial.printf("[FETCH] Rotating persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+        _db->persist();
+    }
+
+    reclaimTLSReserve();
+    if (_rendererHandle) vTaskResume(_rendererHandle);
+}
+
 void DataFetcher::fetchAll() {
     if (_rendererHandle) vTaskSuspend(_rendererHandle);
 
     if (WiFi.status() != WL_CONNECTED) {
         Serial.printf("FetchAll: WiFi not connected (status=%d), aborting\n", WiFi.status());
+        if (_rendererHandle) vTaskResume(_rendererHandle);
+        return;
+    }
+
+    releaseTLSReserve();
+    // Let lwIP stabilize after WiFi connect/NTP before any TLS handshake
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    if (ESP.getFreeHeap() < 50000) {
+        Serial.printf("[FETCH] freeHeap=%u < 50K, aborting fetchAll\n", ESP.getFreeHeap());
         if (_rendererHandle) vTaskResume(_rendererHandle);
         return;
     }
@@ -129,13 +244,17 @@ void DataFetcher::fetchAll() {
     const char* top14Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/top-14/phase-reguliere/resultats";
     const char* prod2Base = "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/pro-d2/phase-reguliere/resultats";
 
-    Serial.printf("[FETCH] start: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
+    Serial.printf("[FETCH] start: heap=%u maxBlock=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
 
+    bool ccOk = false;
     if (prefs.comp[2].enabled && cc) {
-        fetchCC(idalgo, *cc);
-        Serial.printf("[FETCH] after CC fetch: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
-        _db->updateCC(*cc);
-        Serial.printf("[FETCH] after CC updateDB: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
+        ccOk = fetchCC(idalgo, *cc);
+        Serial.printf("[FETCH] after CC fetch: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+        if (ccOk) {
+            _db->updateCC(*cc);
+            Serial.printf("[FETCH] after CC updateDB: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+        }
+        vTaskDelay(pdMS_TO_TICKS(3000));
     } else {
         Serial.println("[FETCH] CC disabled, skipping");
     }
@@ -143,13 +262,14 @@ void DataFetcher::fetchAll() {
     if (prefs.comp[0].enabled && top14) {
         Serial.println("[FETCH] before Top14 fetch");
         if (idalgo.fetch(top14Base, *top14)) {
-            Serial.println("[FETCH] Top14 fetch OK, before fetchNextJournee");
-            fetchNextJournee(*top14, top14Base, idalgo);
-            Serial.println("[FETCH] before updateTop14");
+            Serial.println("[FETCH] Top14 fetch OK, before updateTop14");
             _db->updateTop14(*top14);
             Serial.println("[FETCH] after updateTop14");
+        } else {
+            Serial.println("[FETCH] Top14 fetch failed, continuing");
         }
-        Serial.printf("[FETCH] after Top14: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
+        Serial.printf("[FETCH] after Top14: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+        vTaskDelay(pdMS_TO_TICKS(3000));
     } else {
         Serial.println("[FETCH] Top14 disabled, skipping");
     }
@@ -157,26 +277,29 @@ void DataFetcher::fetchAll() {
     if (prefs.comp[1].enabled && prod2) {
         Serial.println("[FETCH] before ProD2 fetch");
         if (idalgo.fetch(prod2Base, *prod2)) {
-            Serial.println("[FETCH] ProD2 fetch OK, before fetchNextJournee");
-            fetchNextJournee(*prod2, prod2Base, idalgo);
-            Serial.println("[FETCH] before updateProd2");
+            Serial.println("[FETCH] ProD2 fetch OK, before updateProd2");
             _db->updateProd2(*prod2);
             Serial.println("[FETCH] after updateProd2");
+        } else {
+            Serial.println("[FETCH] ProD2 fetch failed, continuing");
         }
-        Serial.printf("[FETCH] after ProD2: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
+        Serial.printf("[FETCH] after ProD2: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
     } else {
         Serial.println("[FETCH] ProD2 disabled, skipping");
     }
+
+fetchCleanup:
 
     if (top14) heap_caps_free(top14);
     if (prod2) heap_caps_free(prod2);
     if (cc)    heap_caps_free(cc);
 
     _firstFetchDone = true;
-    Serial.printf("[FETCH] before persist: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
+    Serial.printf("[FETCH] before persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
     _db->persist();
-    Serial.printf("[FETCH] done persist: heap=%u max=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
+    Serial.printf("[FETCH] done persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
 
+    reclaimTLSReserve();
     if (_rendererHandle) vTaskResume(_rendererHandle);
 }
 
@@ -196,9 +319,9 @@ static bool isDuplicateMatch(const CompetitionData& d, const MatchData& m, bool 
     return false;
 }
 
-void DataFetcher::fetchCC(IdalgoParser& idalgo, CompetitionData& d) {
+bool DataFetcher::fetchCC(IdalgoParser& idalgo, CompetitionData& d) {
     // Single calendar page covers pools + all final phases
-    idalgo.fetchCalendar("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup/calendrier", d);
+    return idalgo.fetchCalendar("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup/calendrier", d);
 }
 
 void DataFetcher::fetchNextJournee(CompetitionData& d, const char* compPath,

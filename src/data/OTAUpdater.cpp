@@ -40,9 +40,9 @@ bool OTAUpdater::checkForUpdate() {
         strlcpy(_lastError, "WiFi not connected", sizeof(_lastError));
         return false;
     }
-    if (ESP.getMaxAllocHeap() < 45000) {
+    if (ESP.getFreeHeap() < 60000) {
         strlcpy(_lastError, "Heap too low for TLS", sizeof(_lastError));
-        Serial.printf("[OTA] heap too low (max=%u)\n", ESP.getMaxAllocHeap());
+        Serial.printf("[OTA] heap too low (free=%u)\n", ESP.getFreeHeap());
         return false;
     }
     HTTPClient http;
@@ -51,8 +51,8 @@ bool OTAUpdater::checkForUpdate() {
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     const char* locKey = "Location";
     http.collectHeaders(&locKey, 1);
-    Serial.printf("[OTA] Checking GitHub for update... heap=%u max=%u\n",
-                  ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    Serial.printf("[OTA] Checking GitHub for update... heap=%u free=%u\n",
+                  ESP.getFreeHeap(), ESP.getFreeHeap());
     int code = http.GET();
 
     // Manual redirect: end() destroys the TLS client, begin() creates a fresh one

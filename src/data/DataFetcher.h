@@ -11,6 +11,7 @@ public:
     void connectWiFi();
     void syncNTP();
     void fetchAll();
+    void fetchRotating();
     void setRendererHandle(TaskHandle_t h) { _rendererHandle = h; }
 
     bool isWiFiConnected() const { return _wifiOk; }
@@ -26,13 +27,14 @@ private:
     uint32_t _lastNTP = 0;
     TaskHandle_t _rendererHandle = nullptr;
     char _ccPhaseBase[128] = {};  // cached CC base URL, e.g. ".../champions-cup/1-4-de-finale"
+    uint8_t _fetchIndex = 0;      // rotating fetch: 0=Top14, 1=ProD2, 2=CC
 
     void fetchLive();
     void loop();
     static void taskFunc(void* param);
 
     // Fetch CC results+fixtures, trying each known phase until one has data
-    void fetchCC(IdalgoParser& idalgo, CompetitionData& d);
+    bool fetchCC(IdalgoParser& idalgo, CompetitionData& d);
     // If d.current_round > 0, fetch journee-(round+1)/calendrier to get full next round fixtures
     void fetchNextJournee(CompetitionData& d, const char* compPath,
                           IdalgoParser& idalgo);

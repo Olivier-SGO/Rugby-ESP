@@ -277,7 +277,7 @@ void WebUI::begin(MatchDB* db) {
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
             Serial.printf("OTA %s: %s (%u bytes)\n", label, upload.filename.c_str(), upload.totalSize);
-            if (!Update.begin(upload.totalSize, command)) {
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN, command)) {
                 Serial.printf("Update.begin failed: %s\n", Update.errorString());
             }
         } else if (upload.status == UPLOAD_FILE_WRITE) {

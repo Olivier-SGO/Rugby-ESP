@@ -88,6 +88,7 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
                     Serial.printf("[PSRAM] readEntireStream: timeout at %zu / %d bytes\n", len, expectedSize);
                     break;
                 }
+                if (!http.connected() && !stream->available()) break;
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
@@ -133,6 +134,7 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     WiFiClientSecureSmall client;
     client.setInsecure();
     client.setHandshakeTimeout(30);
+    client.setTimeout(30000); // 30s for the whole connect operation
     HTTPClient http;
     http.setTimeout(60000);
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
@@ -162,6 +164,7 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     parseChunk(page, totalLen, out, true);
     heap_caps_free(page);
     http.end();
+    vTaskDelay(pdMS_TO_TICKS(500)); // laisser lwIP libérer le socket et le heap se stabiliser
     Serial.printf("Idalgo: %u bytes, %d results, %d fixtures\n",
                   totalLen, out.result_count, out.fixture_count);
     return true;
@@ -453,12 +456,13 @@ bool IdalgoParser::readClassText(const char* html, const char* cls, char* dst, s
 bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     out.clear();
     const int TEMP_MAX = 80;
-    MatchData* temp = new MatchData[TEMP_MAX];
+    MatchData* temp = (MatchData*)heap_caps_malloc(sizeof(MatchData) * TEMP_MAX, MALLOC_CAP_SPIRAM);
     int tempCount = 0;
 
     WiFiClientSecureSmall client;
     client.setInsecure();
     client.setHandshakeTimeout(30);
+    client.setTimeout(30000); // 30s for the whole connect operation
     HTTPClient http;
     http.setTimeout(60000);
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
@@ -469,7 +473,7 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     if (code != 200) {
         Serial.printf("IdalgoCalendar %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
         http.end();
-        delete[] temp;
+        heap_caps_free(temp);
         return false;
     }
 
@@ -482,7 +486,7 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     if (!page) {
         Serial.println("IdalgoCalendar: failed to allocate page buffer");
         http.end();
-        delete[] temp;
+        heap_caps_free(temp);
         return false;
     }
 
@@ -490,6 +494,7 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     parseCalendarChunk(page, totalLen, temp, tempCount, TEMP_MAX, true);
     heap_caps_free(page);
     http.end();
+    vTaskDelay(pdMS_TO_TICKS(500)); // laisser lwIP libérer le socket et le heap se stabiliser
 
     // ── Filter pools: scheduled + last 12 finished ──
     int scheduledPools = 0;
@@ -529,7 +534,7 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
             out.results[out.result_count++] = temp[i];
     }
 
-    delete[] temp;
+    heap_caps_free(temp);
     Serial.printf("IdalgoCalendar: %u bytes, %d temp, %d results, %d fixtures\n",
                   totalLen, tempCount, out.result_count, out.fixture_count);
     return true;

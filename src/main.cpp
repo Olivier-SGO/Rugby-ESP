@@ -57,6 +57,10 @@ static void hwTest() {
 
 TaskHandle_t rendererHandle = nullptr;
 
+// Global TLS heap reserve — allocated early when heap is contiguous,
+// released before each fetch session to create a clean block for TLS handshakes.
+uint8_t* gTLSReserve = nullptr;
+
 // ── Boot info screen (IP + mDNS) ─────────────────────────────────────────────
 static void showBootInfo() {
     if (!rendererHandle) return;
@@ -144,6 +148,17 @@ void setup() {
     neo.begin();
     neoSet(0, 0, 64); // blue = booting
 
+    // Reserve a contiguous SRAM block for TLS handshakes before the heap gets fragmented.
+    // Despite max_frag_len=4096, mbedTLS in this SDK uses MAX_CONTENT_LEN=16384 per buffer
+    // (input + output = 32KB total) PLUS session/handshake structures (~10-15KB).
+    // We need ~48KB contiguous for a reliable handshake.
+    gTLSReserve = (uint8_t*)malloc(49152);
+    if (gTLSReserve) {
+        Serial.println("[HEAP] 48KB reserved for TLS (pre-fragmentation)");
+    } else {
+        Serial.println("[HEAP] WARNING: failed to reserve 48KB TLS block");
+    }
+
     if (!LittleFS.begin(false)) {
         Serial.println("LittleFS mount failed (run uploadfs)");
     } else {
@@ -171,6 +186,8 @@ void setup() {
     } else {
         Serial.println("PSRAM: NOT detected");
     }
+
+    Serial.println("[TLS] max_frag_len patch: ACTIVE (4096)");
 
     DB.begin();
     DB.load();
@@ -212,14 +229,14 @@ void setup() {
     Scenes.begin(&DB);
     Serial.println("setup: Scenes.begin() done");
 
-    xTaskCreatePinnedToCore(renderTask, "Renderer", 10240, nullptr, 2, &rendererHandle, 1);
+    xTaskCreatePinnedToCore(renderTask, "Renderer", 6144, nullptr, 2, &rendererHandle, 1);
     Serial.println("setup: renderer task created");
 
     // Boot fetch in background — renderer stays alive so user sees old data
     neoSet(0, 64, 64); // cyan = fetching
     Fetcher.setDB(&DB);
     Fetcher.setRendererHandle(rendererHandle);
-    xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 20480, nullptr, 1, nullptr, 0);
+    xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 12288, nullptr, 1, nullptr, 0);
 
     esp_task_wdt_init(WDT_TIMEOUT_S, true);
     Serial.printf("Boot setup done — heap: %u  maxBlock: %u  PSRAM: %u\n",

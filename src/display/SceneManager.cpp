@@ -163,10 +163,17 @@ void SceneManager::rebuildSlots() {
     uint32_t fixtureMs = (uint32_t)prefs.fixture_s  * 1000;
     uint32_t standMs   = (uint32_t)prefs.standing_s * 1000;
 
-    // Static buffers to avoid stack overflow in renderTask (was ~3600 bytes local)
-    static MatchData liveBuf[CompetitionData::MAX_MATCHES];
-    static MatchData nonliveBuf[CompetitionData::MAX_MATCHES];
-    static MatchData sortedBuf[CompetitionData::MAX_MATCHES];
+    // Static buffers in PSRAM to avoid SRAM consumption in renderTask
+    static MatchData* liveBuf = nullptr;
+    static MatchData* nonliveBuf = nullptr;
+    static MatchData* sortedBuf = nullptr;
+    if (!liveBuf)   liveBuf   = (MatchData*)heap_caps_malloc(sizeof(MatchData) * CompetitionData::MAX_MATCHES, MALLOC_CAP_SPIRAM);
+    if (!nonliveBuf) nonliveBuf = (MatchData*)heap_caps_malloc(sizeof(MatchData) * CompetitionData::MAX_MATCHES, MALLOC_CAP_SPIRAM);
+    if (!sortedBuf)  sortedBuf  = (MatchData*)heap_caps_malloc(sizeof(MatchData) * CompetitionData::MAX_MATCHES, MALLOC_CAP_SPIRAM);
+    if (!liveBuf || !nonliveBuf || !sortedBuf) {
+        Serial.println("[WARN] SceneManager: failed to allocate PSRAM buffers");
+        return;
+    }
 
     auto addComp = [&](const CompetitionData* d, int ci) {
         if (!d) return;
