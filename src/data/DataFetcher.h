@@ -10,7 +10,7 @@ public:
     void setDB(MatchDB* db) { _db = db; }  // call before boot task; begin() also sets it
     void connectWiFi();
     void syncNTP();
-    void fetchAll();
+    void fetchAll(bool forceAll = false);
     void fetchRotating();
     void setRendererHandle(TaskHandle_t h) { _rendererHandle = h; }
 
@@ -25,6 +25,8 @@ private:
     bool _firstFetchDone = false;
     uint32_t _lastIdalgo = 0;
     uint32_t _lastNTP = 0;
+    uint32_t _lastWiFiReconnectAttempt = 0;
+    uint32_t _lastWiFiFullReconnect = 0;
     TaskHandle_t _rendererHandle = nullptr;
     char _ccPhaseBase[128] = {};  // cached CC base URL, e.g. ".../champions-cup/1-4-de-finale"
     uint8_t _fetchIndex = 0;      // rotating fetch: 0=Top14, 1=ProD2, 2=CC

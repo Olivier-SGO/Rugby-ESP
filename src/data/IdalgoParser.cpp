@@ -504,10 +504,20 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
         if (strcmp(g, "Finale") == 0) return 4;
         return 0;
     };
+    // Keep the most advanced phase that has actually been played (Finished/Live).
+    // If no knockout phase has been played yet, fall back to the most advanced listed phase.
     int maxKnockoutPhase = 0;
     for (int i = 0; i < tempCount; i++) {
         int o = knockoutOrder(temp[i].group);
-        if (o > maxKnockoutPhase) maxKnockoutPhase = o;
+        if (o > maxKnockoutPhase &&
+            (temp[i].status == MatchStatus::Finished || temp[i].status == MatchStatus::Live))
+            maxKnockoutPhase = o;
+    }
+    if (maxKnockoutPhase == 0) {
+        for (int i = 0; i < tempCount; i++) {
+            int o = knockoutOrder(temp[i].group);
+            if (o > maxKnockoutPhase) maxKnockoutPhase = o;
+        }
     }
 
     // ── Filter pools: scheduled + last 12 finished ──
@@ -536,14 +546,14 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
                 keep = false;
             }
         } else {
-            // Knockout finals: keep the most advanced phase, but also keep
-            // matches with unrecognized/empty group to avoid losing data
-            // when the HTML format changes or omits the phase label.
+            // Knockout finals: keep the most advanced phase that has results,
+            // plus all later phases (fixtures). Also keep matches with
+            // unrecognized/empty group to avoid losing data on HTML changes.
             int order = knockoutOrder(temp[i].group);
             if (maxKnockoutPhase == 0) {
                 keep = true; // no recognizable finals found — keep all non-pool
             } else {
-                keep = (order == maxKnockoutPhase) || (order == 0);
+                keep = (order >= maxKnockoutPhase) || (order == 0);
             }
         }
         if (!keep) continue;
@@ -692,6 +702,16 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
             tm.tm_min  = mm;
             tm.tm_sec  = ss;
             match.kickoff_utc = mktime(&tm);
+        }
+    }
+
+    // Fallback: website sometimes leaves data-state="0" even after the match ends.
+    // If kickoff is more than 4 hours in the past, treat as Finished so the
+    // match is not lost during knockout-phase filtering.
+    if (match.status == MatchStatus::Scheduled && match.kickoff_utc > 0) {
+        time_t now = time(nullptr);
+        if (now > match.kickoff_utc + 4 * 3600) {
+            match.status = MatchStatus::Finished;
         }
     }
 

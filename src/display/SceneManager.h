@@ -16,6 +16,7 @@ public:
     void tick();
 
     void nextScene();
+    void prevScene();
     void setLivePriority(bool live);
 
     // Signal that display content needs one re-render (call after data update)

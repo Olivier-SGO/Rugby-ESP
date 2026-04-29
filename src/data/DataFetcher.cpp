@@ -9,6 +9,13 @@
 #include <esp_heap_caps.h>
 
 extern uint8_t* gTLSReserve;
+bool gFetching = false;
+
+// RAII helper to ensure gFetching is always cleared on exit
+struct FetchingFlag {
+    FetchingFlag()  { gFetching = true; }
+    ~FetchingFlag() { gFetching = false; }
+};
 
 static void releaseTLSReserve() {
     if (gTLSReserve) {
@@ -113,11 +120,35 @@ void DataFetcher::loop() {
         return;
     }
     if (WiFi.status() != WL_CONNECTED) {
-        _wifiOk = false;
-        connectWiFi();
+        if (_wifiOk) {
+            _wifiOk = false;
+            Serial.println("[WIFI] disconnected");
+        }
+        // Light reconnect every 5s (no scan — lets ESP auto-reconnect kick in)
+        if (now - _lastWiFiReconnectAttempt > 5000) {
+            _lastWiFiReconnectAttempt = now;
+            WiFi.reconnect();
+            Serial.println("[WIFI] reconnect() called");
+        }
+        // Full scan+connect cycle every 30s as fallback
+        if (now - _lastWiFiFullReconnect > 30000) {
+            _lastWiFiFullReconnect = now;
+            Serial.println("[WIFI] attempting full scan reconnect...");
+            connectWiFi();
+        }
         return;
     }
-    if (!_wifiOk) { connectWiFi(); return; }
+    if (!_wifiOk) {
+        connectWiFi();
+        if (_wifiOk) {
+            Serial.println("[FETCH] WiFi reconnected — triggering immediate fetch");
+            if (!_timeSynced) syncNTP();
+            fetchRotating();
+            _lastIdalgo = millis();
+            _lastNTP = millis();
+        }
+        return;
+    }
     if (!_timeSynced) { syncNTP(); return; }
 
     if (gOTADownloading) {
@@ -136,6 +167,7 @@ void DataFetcher::loop() {
 }
 
 void DataFetcher::fetchRotating() {
+    FetchingFlag fetching;
     if (_rendererHandle) vTaskSuspend(_rendererHandle);
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -213,7 +245,8 @@ void DataFetcher::fetchRotating() {
     if (_rendererHandle) vTaskResume(_rendererHandle);
 }
 
-void DataFetcher::fetchAll() {
+void DataFetcher::fetchAll(bool forceAll) {
+    FetchingFlag fetching;
     if (_rendererHandle) vTaskSuspend(_rendererHandle);
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -252,7 +285,8 @@ void DataFetcher::fetchAll() {
     Serial.printf("[FETCH] start: heap=%u maxBlock=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
 
     bool ccOk = false;
-    if (prefs.comp[2].enabled && cc) {
+    if ((forceAll || prefs.comp[2].enabled) && cc) {
+        if (forceAll && !prefs.comp[2].enabled) Serial.println("[FETCH] CC forced (boot)");
         Serial.println("[FETCH] before CC fetch");
         ccOk = fetchCC(idalgo, *cc);
         Serial.printf("[FETCH] after CC fetch: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
@@ -265,7 +299,8 @@ void DataFetcher::fetchAll() {
         Serial.println("[FETCH] CC disabled, skipping");
     }
 
-    if (prefs.comp[0].enabled && top14) {
+    if ((forceAll || prefs.comp[0].enabled) && top14) {
+        if (forceAll && !prefs.comp[0].enabled) Serial.println("[FETCH] Top14 forced (boot)");
         Serial.println("[FETCH] before Top14 fetch");
         if (idalgo.fetch(top14Base, *top14)) {
             Serial.println("[FETCH] Top14 fetch OK, before updateTop14");
@@ -280,7 +315,8 @@ void DataFetcher::fetchAll() {
         Serial.println("[FETCH] Top14 disabled, skipping");
     }
 
-    if (prefs.comp[1].enabled && prod2) {
+    if ((forceAll || prefs.comp[1].enabled) && prod2) {
+        if (forceAll && !prefs.comp[1].enabled) Serial.println("[FETCH] ProD2 forced (boot)");
         Serial.println("[FETCH] before ProD2 fetch");
         if (idalgo.fetch(prod2Base, *prod2)) {
             Serial.println("[FETCH] ProD2 fetch OK, before updateProd2");

@@ -112,6 +112,16 @@ Si aucun réseau WiFi n'est enregistré, la carte bascule automatiquement en **m
 
 > 🔒 **Sécurité** : Les credentials WiFi sont stockés dans la mémoire flash interne de l'ESP32 (chiffrés par le SDK). Ils survivent aux redémarrages et aux mises à jour OTA.
 
+#### Récupération en cas de perte de WiFi
+
+Si la carte perd le réseau WiFi configuré, elle tente de se reconnecter automatiquement. Si après **5 minutes** le réseau n'est toujours pas retrouvé :
+
+1. La carte bascule en **mode point d'accès** (`RugbyDisplay-Setup`) pendant **2 minutes**
+2. Vous pouvez vous y connecter pour vérifier la configuration ou ajouter un nouveau réseau
+3. Au bout de 2 minutes, l'AP s'éteint et la carte retourne en mode STA pour réessayer
+
+> 💡 **Cas particulier** : Si **aucun réseau WiFi n'est enregistré**, le mode AP démarre **immédiatement** au boot pour permettre la configuration initiale.
+
 ### 3. Web UI
 Une fois connectée au WiFi, accédez à la configuration :
 - **Adresse** : `http://rugby-display.local` (mDNS) ou l'IP affichée dans les logs série

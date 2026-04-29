@@ -49,6 +49,11 @@ bool OTAUpdater::checkForUpdate() {
         _busy = false;
         return false;
     }
+    if (gFetching) {
+        strlcpy(_lastError, "Récupération en cours, réessayez dans quelques instants", sizeof(_lastError));
+        _busy = false;
+        return false;
+    }
     // TLS handshake for GitHub needs ~45-55KB contiguous SRAM (same as Idalgo).
     // Use a conservative threshold since this runs while TLS reserve may be reclaimed.
     if (ESP.getFreeHeap() < 50000) {
@@ -126,6 +131,11 @@ bool OTAUpdater::applyUpdate() {
     }
     if (!_firmwareURL[0] || !_firmwareSize) {
         strlcpy(_lastError, "Missing firmware info", sizeof(_lastError));
+        _busy = false;
+        return false;
+    }
+    if (gFetching) {
+        strlcpy(_lastError, "Récupération en cours, réessayez dans quelques instants", sizeof(_lastError));
         _busy = false;
         return false;
     }

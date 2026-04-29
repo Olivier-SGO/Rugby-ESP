@@ -61,7 +61,6 @@ void ScoreboardScene::drawHeader() {
     int lw = gCompLogoLgW[_compIdx];
     int logoX = CENTER_MID - lw / 2;
     Display.drawBitmap565(logoX, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
-    drawWiFiStatusIfNeeded(logoX, 0);
 }
 
 void ScoreboardScene::drawScores() {
@@ -97,6 +96,9 @@ void ScoreboardScene::drawScores() {
     Display.drawTextShadow(lc - tw / 2, 48, _md.home_abbrev, C_WHITE, af);
     Display.getTextBounds(_md.away_abbrev, 0, 0, &x1, &y1, &tw, &th, af);
     Display.drawTextShadow(rc - tw / 2, 48, _md.away_abbrev, C_WHITE, af);
+
+    // WiFi disconnected icon under home team name, bottom-left
+    drawWiFiDisconnectedIconAt(lc - 8, 50);
 
     // Status at very bottom center:
     //   - Finished → "Final" in grey

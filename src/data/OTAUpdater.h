@@ -33,3 +33,6 @@ private:
 
 // Global flag to prevent DataFetcher from running during OTA download
 extern bool gOTADownloading;
+
+// Global flag set while DataFetcher is actively fetching / parsing
+extern bool gFetching;

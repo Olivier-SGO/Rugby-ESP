@@ -21,6 +21,7 @@
 #include "WebUI.h"
 #include "LogoCache.h"
 #include "OTAUpdater.h"
+#include "ButtonManager.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
 #include "fonts/AtkinsonHyperlegibleBold12pt7b.h"
 
@@ -118,7 +119,7 @@ static void bootFetchTask(void*) {
     Fetcher.connectWiFi();
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
 
-    Fetcher.fetchAll();
+    Fetcher.fetchAll(true);
 
     // OTA auto-check AFTER Idalgo fetches — match data is already cached
     // Release TLS reserve so the GitHub handshake has a clean contiguous block.
@@ -244,6 +245,7 @@ void setup() {
 
     // Boot fetch in background — renderer stays alive so user sees old data
     neoSet(0, 64, 64); // cyan = fetching
+    Buttons.begin();
     Fetcher.setDB(&DB);
     Fetcher.setRendererHandle(rendererHandle);
     xTaskCreatePinnedToCore(bootFetchTask, "BootFetch", 12288, nullptr, 1, nullptr, 0);
@@ -254,6 +256,7 @@ void setup() {
 }
 
 void loop() {
+    Buttons.update();
     ArduinoOTA.handle();
     Web.handle();
     if (Web.shouldRestart()) {
@@ -282,21 +285,55 @@ void loop() {
     static bool apStarted = false;
     static bool mdnsStarted = false;
     static DNSServer dnsServer;
+    static uint32_t wifiDisconnectedSince = 0;
+    static uint32_t apStartedAt = 0;
     if (bootFetchHandled && servicesStarted) {
-        if (!apStarted && WiFi.status() != WL_CONNECTED) {
-            WiFiManager::startAP();
-            dnsServer.start(53, "*", WiFi.softAPIP());
-            Serial.println("DNS captive portal started");
-            apStarted = true;
-            Scenes.markDirty();
-        }
-        if (apStarted) {
-            dnsServer.processNextRequest();
-        }
-        if (apStarted && WiFi.status() == WL_CONNECTED) {
-            WiFiManager::stopAP();
-            apStarted = false;
-            Scenes.markDirty();
+        if (WiFi.status() == WL_CONNECTED) {
+            wifiDisconnectedSince = 0;
+            if (apStarted) {
+                WiFiManager::stopAP();
+                apStarted = false;
+                Scenes.markDirty();
+            }
+        } else {
+            if (wifiDisconnectedSince == 0) {
+                wifiDisconnectedSince = millis();
+                WiFiManager::loadNetworks();
+            }
+
+            if (!apStarted) {
+                bool hasNetworks = (WiFiManager::count > 0);
+                if (!hasNetworks) {
+                    // No saved networks: AP immediately so user can configure
+                    WiFiManager::startAP();
+                    dnsServer.start(53, "*", WiFi.softAPIP());
+                    Serial.println("AP started (no saved networks)");
+                    apStarted = true;
+                    apStartedAt = millis();
+                    Scenes.markDirty();
+                } else if (millis() - wifiDisconnectedSince > 300000) {
+                    // Saved networks but 5 min down: start AP for 2 min
+                    WiFiManager::startAP();
+                    dnsServer.start(53, "*", WiFi.softAPIP());
+                    Serial.println("AP started (5 min timeout)");
+                    apStarted = true;
+                    apStartedAt = millis();
+                    Scenes.markDirty();
+                }
+            } else {
+                // AP running
+                dnsServer.processNextRequest();
+                WiFiManager::loadNetworks(); // reload in case user added networks via web UI
+
+                // Stop AP after 2 min if we have saved networks (give user time to config)
+                if (WiFiManager::count > 0 && millis() - apStartedAt > 120000) {
+                    WiFiManager::stopAP();
+                    apStarted = false;
+                    wifiDisconnectedSince = millis(); // Reset 5 min timer
+                    Scenes.markDirty();
+                    Serial.println("AP stopped (2 min elapsed), back to STA");
+                }
+            }
         }
         if (!mdnsStarted && WiFi.status() == WL_CONNECTED) {
             ArduinoOTA.setHostname("rugby-display");

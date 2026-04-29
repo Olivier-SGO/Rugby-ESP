@@ -2,9 +2,11 @@
 #include "CompLogos.h"
 #include "DisplayPrefs.h"
 #include "DisplayManager.h"
+#include "WiFiIcon.h"
 #include "config.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
 #include <Arduino.h>
+#include <WiFi.h>
 
 SceneManager Scenes;
 
@@ -49,6 +51,9 @@ void SceneManager::tick() {
             Display.drawTextRelief(CENTER_MID - tw/2, 22, msg1, C_GOLD, f8);
             Display.getTextBounds(msg2, 0, 0, &x1, &y1, &tw, &th, f8);
             Display.drawTextRelief(CENTER_MID - tw/2, 40, msg2, C_GOLD, f8);
+            if (WiFi.status() != WL_CONNECTED) {
+                Display.drawBitmap565(CENTER_MID - 8, 50, 16, 16, WIFI_DISCONNECTED_ICON);
+            }
             Display.flip();
         }
         return;
@@ -127,6 +132,14 @@ void SceneManager::nextScene() {
     _dirty = true;
 }
 
+void SceneManager::prevScene() {
+    if (_slotCount == 0) return;
+    _current = (_current + _slotCount - 1) % _slotCount;
+    activateCurrent();
+    _sceneStart = millis();
+    _dirty = true;
+}
+
 void SceneManager::setLivePriority(bool live) {
     _livePriority = live;
     if (live) _lastLiveDetect = millis();
@@ -143,10 +156,9 @@ void SceneManager::rebuildSlots() {
 
     DisplayPrefs prefs;
     loadDisplayPrefs(prefs);
-    Serial.printf("Prefs: T14 en=%d sc=%d fx=%d st=%d, PD2 en=%d sc=%d fx=%d st=%d, CC en=%d sc=%d fx=%d st=%d\n",
-                  prefs.comp[0].enabled, prefs.comp[0].scores, prefs.comp[0].fixtures, prefs.comp[0].standings,
-                  prefs.comp[1].enabled, prefs.comp[1].scores, prefs.comp[1].fixtures, prefs.comp[1].standings,
-                  prefs.comp[2].enabled, prefs.comp[2].scores, prefs.comp[2].fixtures, prefs.comp[2].standings);
+
+    static size_t lastSlotCount = SIZE_MAX;
+    bool changed = false;
 
     struct CompInfo { const char* name; uint16_t color; uint8_t playoff; uint8_t relStart; };
     CompInfo comps[] = {
@@ -256,18 +268,20 @@ void SceneManager::rebuildSlots() {
         }
     };
 
+    int t14r = -1, t14f = -1, pd2r = -1, pd2f = -1, ccr = -1, ccf = -1;
     const CompetitionData* t14 = _db->acquireTop14();
-    if (t14) { addComp(t14, 0); _db->release(); }
+    if (t14) { t14r = t14->result_count; t14f = t14->fixture_count; addComp(t14, 0); _db->release(); }
     const CompetitionData* pd2 = _db->acquireProd2();
-    if (pd2) { addComp(pd2, 1); _db->release(); }
+    if (pd2) { pd2r = pd2->result_count; pd2f = pd2->fixture_count; addComp(pd2, 1); _db->release(); }
     const CompetitionData* cc  = _db->acquireCC();
-    if (cc)  { addComp(cc,  2); _db->release(); }
+    if (cc)  { ccr = cc->result_count;  ccf = cc->fixture_count;  addComp(cc,  2); _db->release(); }
 
-    int t14r = t14 ? t14->result_count : -1, t14f = t14 ? t14->fixture_count : -1;
-    int pd2r = pd2 ? pd2->result_count : -1, pd2f = pd2 ? pd2->fixture_count : -1;
-    int ccr  = cc  ? cc->result_count  : -1, ccf  = cc  ? cc->fixture_count  : -1;
-    Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d)\n",
-                  _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf);
+    changed = (_slotCount != lastSlotCount);
+    lastSlotCount = _slotCount;
+    if (changed) {
+        Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d)\n",
+                      _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf);
+    }
 
     if (_slotCount == 0) return;
     if (_current >= _slotCount) _current = 0;

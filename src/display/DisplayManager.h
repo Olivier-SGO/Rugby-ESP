@@ -6,6 +6,7 @@ class DisplayManager {
 public:
     bool begin();
     void setBrightness(uint8_t b);
+    uint8_t getBrightness() const { return _brightness; }
 
     // Draw primitives — thin wrappers around the DMA panel
     void fillScreen(uint16_t color);

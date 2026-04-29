@@ -82,6 +82,19 @@ bool WiFiManager::connect() {
         return false;
     }
 
+    // Fast path: try reconnecting to the first saved network directly
+    // without scanning. This avoids scan interference with background
+    // auto-reconnect and is much faster when the network is reachable.
+    Serial.printf("WiFi: trying %s (fast reconnect)\n", nets[0].ssid);
+    delay(200);
+    WiFi.begin(nets[0].ssid, nets[0].password);
+    if (waitForConnect(15000)) {
+        Serial.printf("WiFi: connected to %s\n", nets[0].ssid);
+        return true;
+    }
+    Serial.printf("WiFi: %s fast reconnect failed, falling back to scan\n", nets[0].ssid);
+
+    // Fallback: scan and try all saved networks
     Serial.println("WiFiManager: scanning...");
     int n = WiFi.scanNetworks();
     if (n <= 0) {
