@@ -28,4 +28,5 @@ private:
     static size_t _firmwareSize;
     static size_t _littlefsSize;
     static char   _lastError[64];
+    static bool   _busy;
 };

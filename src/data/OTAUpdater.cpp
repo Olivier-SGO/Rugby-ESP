@@ -1,10 +1,12 @@
 #include "OTAUpdater.h"
 #include "config.h"
+#include "WiFiClientSecureSmall.h"
 #include <Preferences.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <Update.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 
 bool   OTAUpdater::_updateAvailable = false;
 bool   OTAUpdater::_autoUpdate      = false;
@@ -14,6 +16,7 @@ char   OTAUpdater::_littlefsURL[160]  = {0};
 size_t OTAUpdater::_firmwareSize      = 0;
 size_t OTAUpdater::_littlefsSize      = 0;
 char   OTAUpdater::_lastError[64]     = {0};
+bool   OTAUpdater::_busy              = false;
 
 static constexpr const char* VERSION_URL =
     "https://github.com/Olivier-SGO/rugby-display-releases/releases/latest/download/version.json";
@@ -28,6 +31,12 @@ void OTAUpdater::begin() {
 
 // ── Check remote version ─────────────────────────────────────────────────────
 bool OTAUpdater::checkForUpdate() {
+    if (_busy) {
+        strlcpy(_lastError, "OTA busy", sizeof(_lastError));
+        return false;
+    }
+    _busy = true;
+
     _updateAvailable = false;
     _remoteVersion[0] = '\0';
     _firmwareURL[0]   = '\0';
@@ -38,16 +47,23 @@ bool OTAUpdater::checkForUpdate() {
 
     if (WiFi.status() != WL_CONNECTED) {
         strlcpy(_lastError, "WiFi not connected", sizeof(_lastError));
+        _busy = false;
         return false;
     }
-    if (ESP.getFreeHeap() < 60000) {
+    // TLS handshake for GitHub needs ~45-55KB contiguous SRAM (same as Idalgo).
+    // Use a conservative threshold since this runs while TLS reserve may be reclaimed.
+    if (ESP.getFreeHeap() < 50000) {
         strlcpy(_lastError, "Heap too low for TLS", sizeof(_lastError));
         Serial.printf("[OTA] heap too low (free=%u)\n", ESP.getFreeHeap());
+        _busy = false;
         return false;
     }
+
+    WiFiClientSecureSmall client;
+    client.setInsecure();
     HTTPClient http;
     http.setTimeout(30000);
-    http.begin(String(VERSION_URL));
+    http.begin(client, String(VERSION_URL));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     const char* locKey = "Location";
     http.collectHeaders(&locKey, 1);
@@ -72,6 +88,7 @@ bool OTAUpdater::checkForUpdate() {
         snprintf(_lastError, sizeof(_lastError), "HTTP %d", code);
         Serial.printf("[OTA] version.json failed: HTTP %d\n", code);
         http.end();
+        _busy = false;
         return false;
     }
 
@@ -80,33 +97,51 @@ bool OTAUpdater::checkForUpdate() {
 
     if (!_parseVersionJson(body.c_str())) {
         strlcpy(_lastError, "JSON parse error", sizeof(_lastError));
+        _busy = false;
         return false;
     }
 
     if (_compareVersion(_remoteVersion)) {
         _updateAvailable = true;
         Serial.printf("[OTA] Update available: %s (current %s)\n", _remoteVersion, FIRMWARE_VERSION);
+        _busy = false;
         return true;
     }
 
     Serial.printf("[OTA] Up to date: %s\n", FIRMWARE_VERSION);
+    _busy = false;
     return false;
 }
 
 // ── Download + flash both partitions ─────────────────────────────────────────
 bool OTAUpdater::applyUpdate() {
+    if (_busy) {
+        strlcpy(_lastError, "OTA busy", sizeof(_lastError));
+        return false;
+    }
+    _busy = true;
+
     _lastError[0] = '\0';
     if (!_updateAvailable) {
         strlcpy(_lastError, "No update available", sizeof(_lastError));
+        _busy = false;
         return false;
     }
     if (!_firmwareURL[0] || !_firmwareSize) {
         strlcpy(_lastError, "Missing firmware info", sizeof(_lastError));
+        _busy = false;
+        return false;
+    }
+    if (ESP.getFreeHeap() < 40000) {
+        strlcpy(_lastError, "Heap too low for update", sizeof(_lastError));
+        Serial.printf("[OTA] applyUpdate aborted: heap=%u\n", ESP.getFreeHeap());
+        _busy = false;
         return false;
     }
 
     Serial.println("[OTA] Flashing firmware...");
     if (!_flashFromURL(_firmwareURL, _firmwareSize, U_FLASH)) {
+        _busy = false;
         return false;
     }
 
@@ -125,13 +160,23 @@ bool OTAUpdater::applyUpdate() {
     Serial.println("[OTA] Restarting...");
     ESP.restart();
     return true; // never reached
+    // _busy intentionally not cleared — restart makes it moot
 }
 
 // ── Stream a remote binary into the Update subsystem ─────────────────────────
 bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command) {
+    if (ESP.getFreeHeap() < 30000) {
+        snprintf(_lastError, sizeof(_lastError), "Heap too low for %s flash",
+                 command == U_FLASH ? "firmware" : "filesystem");
+        Serial.printf("[OTA] %s\n", _lastError);
+        return false;
+    }
+
+    WiFiClientSecureSmall client;
+    client.setInsecure();
     HTTPClient http;
     http.setTimeout(30000);
-    http.begin(String(url));
+    http.begin(client, String(url));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     const char* locKey = "Location";
     http.collectHeaders(&locKey, 1);
@@ -173,7 +218,16 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
         return false;
     }
 
-    uint8_t buf[4096];
+    // Allocate download buffer in PSRAM to avoid consuming 4KB of task stack.
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        snprintf(_lastError, sizeof(_lastError), "PSRAM buffer alloc failed");
+        Serial.printf("[OTA] %s\n", _lastError);
+        Update.abort();
+        http.end();
+        return false;
+    }
+
     size_t written = 0;
     uint32_t lastData = millis();
     uint32_t lastPrint = millis();
@@ -187,13 +241,14 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
             vTaskDelay(pdMS_TO_TICKS(2));
             continue;
         }
-        size_t toRead = min(avail, sizeof(buf));
+        size_t toRead = min(avail, (size_t)4096);
         size_t n = stream->readBytes(buf, toRead);
         if (n > 0) {
             size_t w = Update.write(buf, n);
             if (w != n) {
                 snprintf(_lastError, sizeof(_lastError), "Update.write failed at %zu", written);
                 Update.abort();
+                heap_caps_free(buf);
                 http.end();
                 return false;
             }
@@ -206,6 +261,8 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
             }
         }
     }
+
+    heap_caps_free(buf);
 
     if (written != expectedSize) {
         snprintf(_lastError, sizeof(_lastError), "Incomplete download: %zu / %zu", written, expectedSize);

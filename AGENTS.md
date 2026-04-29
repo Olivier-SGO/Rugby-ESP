@@ -194,6 +194,7 @@ Les commentaires de code et la documentation technique sont principalement en **
 6. **SVG** : Pillow ne supporte pas SVG nativement. Utiliser `cairosvg` + cairo (Homebrew) pour les logos comme Ulster.
 7. **Logos .bin** sont gitignorés (`*.bin`, `data/logos/`) — régénérer avec `python3 tools/convert_logos.py` après un clone.
 8. **Patch TLS obligatoire** : `tools/patch_mbedtls.py` (exécuté automatiquement via `extra_scripts` dans `platformio.ini`) force `max_frag_len=4096` dans `ssl_client.cpp` du framework Arduino-ESP32. Sans ce patch, les buffers TLS restent à 16KB×2 = 32KB et les handshakes HTTPS échouent par manque de heap (maxBlock < 45K). Le script est idempotent — il ne modifie le fichier que si le patch n'est pas déjà présent.
+9. **OTA et TLS reserve — libérer la réserve avant chaque handshake, même pour GitHub** : `OTAUpdater::checkForUpdate()` et `applyUpdate()` font des handshakes TLS vers `github.com`. Si la réserve TLS de 48K est allouée au moment de ces handshakes, le `maxBlock` disponible tombe sous le seuil critique et le handshake échoue. La réserve **doit être libérée** avant `checkForUpdate()` (au boot et en manuel) et **réclamée** après. Le buffer de téléchargement OTA (`_flashFromURL`) doit être alloué en PSRAM, pas sur la stack, pour éviter le stack overflow dans les handlers web async.
 
 ---
 
@@ -529,6 +530,40 @@ void DataFetcher::fetchAll() {
 - 3 fetches au boot maximum
 
 Sans ces optimisations cumulatives, même une réserve de 48K ne suffit pas à garantir `maxBlock ≥ 80K`.
+
+---
+
+## 🔥 Leçons critiques de debugging (suite)
+
+### 10. OTA — attention aux conflits mémoire/TLS
+
+**Problème** : `OTAUpdater::checkForUpdate()` fait un handshake TLS vers GitHub pour récupérer `version.json`. `applyUpdate()` en fait **deux autres** (firmware + filesystem). Chaque handshake consomme les mêmes ~45–55K de SRAM contiguë que les fetches Idalgo.
+
+**Risque #1 — Réserve TLS pas libérée pendant OTA** : au boot, `fetchAll()` réclame la réserve TLS de 48K à la fin. Ensuite `bootFetchTask` appelle `checkForUpdate()`. Avec la réserve allouée, le `maxBlock` disponible pour le handshake GitHub est réduit à ~35–40K — **sous le seuil critique**. Le handshake échoue en `HTTP -1` silencieusement.
+
+**Fix** : libérer explicitement `gTLSReserve` avant `checkForUpdate()` et le réclamer après (voir `main.cpp` v1.3.0+).
+
+**Risque #2 — Buffer de téléchargement sur la stack** : `_flashFromURL()` utilisait `uint8_t buf[4096]` sur la stack. Appelé depuis `bootFetchTask` (12K stack, high-water 8.2K), c'était juste. Appelé depuis un handler web async (stack inconnue), c'est dangereux.
+
+**Fix** : allouer le buffer en PSRAM : `heap_caps_malloc(4096, MALLOC_CAP_SPIRAM)`.
+
+**Risque #3 — Appels simultanés à `OTAUpdater`** : `checkForUpdate()` et `applyUpdate()` utilisent des variables statiques partagées (`_updateAvailable`, `_firmwareURL`, etc.) sans mutex. Si un utilisateur clique "Check update" sur la Web UI pendant que `bootFetchTask` fait déjà un `checkForUpdate()`, les variables sont corrompues.
+
+**Fix** : ajouter un flag `_busy` qui rejette les appels entrants si une opération OTA est déjà en cours.
+
+**Risque #4 — `DataFetcher` tourne en arrière-plan pendant l'OTA manuelle** : la Web UI suspend le renderer mais **ne suspend pas** la tâche `DataFetcher`. Si un `fetchRotating()` démarre pendant que `applyUpdate()` télécharge, les deux consomment du heap/TLS simultanément.
+
+**Mitigation** : `applyUpdate()` fait `ESP.restart()` en quelques secondes, donc la fenêtre de conflit est courte. Le flag `_busy` d'OTAUpdater empêche un `checkForUpdate()` simultané. Pour une protection totale, il faudrait exposer le handle de la tâche `DataFetcher` pour la suspendre — pas implémenté dans v1.3.0.
+
+**Risque #5 — Seuil heap incorrect pour OTA** : l'ancien seuil `ESP.getFreeHeap() < 60000` dans `checkForUpdate()` était basé sur l'hypothèse (erronée) que les buffers TLS faisaient 4K×2. Avec des buffers 16K×2 + overhead, le seuil doit être aligné sur celui du fetch Idalgo.
+
+**Fix** : seuil `getFreeHeap() < 50000` pour `checkForUpdate()`, `< 40000` pour `applyUpdate()`, `< 30000` pour `_flashFromURL()`.
+
+**Règle OTA** :
+- Toujours utiliser `WiFiClientSecureSmall` pour les requêtes OTA (même vers GitHub — cohérence + max_frag_len).
+- Toujours libérer la réserve TLS 48K avant tout handshake OTA.
+- Toujours allouer les buffers de téléchargement >1K en PSRAM.
+- Toujours vérifier le heap avant chaque étape (`checkForUpdate` → `Update.begin` → `_flashFromURL`).
 
 ---
 

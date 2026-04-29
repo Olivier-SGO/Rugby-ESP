@@ -4,8 +4,17 @@
 
 /**
  * WiFiClientSecure with max fragment length = 4096 bytes.
- * This reduces the TLS input/output buffers from 2×16KB to 2×4KB,
- * saving ~24KB of heap during the handshake.
+ * This advertises smaller TLS records to the server (max_frag_len),
+ * but does NOT reduce the internal I/O buffer sizes allocated by
+ * mbedtls_ssl_setup() — those remain at 16KB each (input+output=32KB)
+ * because the ESP32 SDK precompiles mbedTLS with
+ * CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=16384 and disables
+ * VARIABLE_BUFFER_LENGTH.
+ *
+ * The real heap savings come from the server sending smaller records,
+ * which avoids reallocation spikes during large transfers.
+ * For the actual handshake to succeed, a contiguous ~48-55KB SRAM
+ * block is still required (see AGENTS.md Bug 15).
  */
 class WiFiClientSecureSmall : public WiFiClientSecure {
 public:

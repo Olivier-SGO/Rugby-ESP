@@ -120,6 +120,13 @@ static void bootFetchTask(void*) {
     Fetcher.fetchAll();
 
     // OTA auto-check AFTER Idalgo fetches — match data is already cached
+    // Release TLS reserve so the GitHub handshake has a clean contiguous block.
+    // fetchAll() reclaimed it; we free it again for OTA and reclaim afterward.
+    if (gTLSReserve) {
+        free(gTLSReserve);
+        gTLSReserve = nullptr;
+        Serial.println("[HEAP] TLS reserve released for OTA check");
+    }
     if (rendererHandle) vTaskSuspend(rendererHandle);
     OTAUpdater::begin();
     if (OTAUpdater::getAutoUpdate() && WiFi.status() == WL_CONNECTED) {
@@ -128,6 +135,8 @@ static void bootFetchTask(void*) {
         }
     }
     if (rendererHandle) vTaskResume(rendererHandle);
+    gTLSReserve = (uint8_t*)malloc(49152);
+    Serial.println(gTLSReserve ? "[HEAP] TLS reserve reclaimed after OTA" : "[HEAP] WARNING: TLS reserve reclaim failed after OTA");
 
     UBaseType_t hw = uxTaskGetStackHighWaterMark(nullptr);
     Serial.printf("[STACK] BootFetch high-water: %u bytes\n", hw);
