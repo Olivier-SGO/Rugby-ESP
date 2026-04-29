@@ -248,6 +248,7 @@ void DataFetcher::fetchAll() {
 
     bool ccOk = false;
     if (prefs.comp[2].enabled && cc) {
+        Serial.println("[FETCH] before CC fetch");
         ccOk = fetchCC(idalgo, *cc);
         Serial.printf("[FETCH] after CC fetch: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
         if (ccOk) {

@@ -1,9 +1,7 @@
 #include "OTAUpdater.h"
 #include "config.h"
-#include "WiFiClientSecureSmall.h"
 #include <Preferences.h>
 #include <HTTPClient.h>
-#include <WiFiClientSecure.h>
 #include <Update.h>
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
@@ -59,11 +57,9 @@ bool OTAUpdater::checkForUpdate() {
         return false;
     }
 
-    WiFiClientSecureSmall client;
-    client.setInsecure();
     HTTPClient http;
     http.setTimeout(30000);
-    http.begin(client, String(VERSION_URL));
+    http.begin(String(VERSION_URL));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     const char* locKey = "Location";
     http.collectHeaders(&locKey, 1);
@@ -172,11 +168,9 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
         return false;
     }
 
-    WiFiClientSecureSmall client;
-    client.setInsecure();
     HTTPClient http;
     http.setTimeout(30000);
-    http.begin(client, String(url));
+    http.begin(String(url));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     const char* locKey = "Location";
     http.collectHeaders(&locKey, 1);
