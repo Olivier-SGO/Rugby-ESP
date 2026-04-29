@@ -197,6 +197,68 @@ Les commentaires de code et la documentation technique sont principalement en **
 
 ---
 
+## 🚨 RÈGLE IMPÉRATIVE — NON-RÉGRESSION MÉMOIRE FETCH/TLS
+
+**Toute modification du code, quelle qu'elle soit, qui augmente la consommation de SRAM statique (BSS), la taille des stacks FreeRTOS, ou réduit le bloc contigu disponible pour le handshake TLS, est INTERDITE sans validation hardware explicite.**
+
+### Pourquoi cette règle est absolue
+
+Le firmware v1.3.0 fonctionne avec une **marge extrêmement fine** :
+- `maxBlock` au moment du fetch : **~84K**
+- Seuil minimum constaté pour 3 handshakes successifs : **~80K**
+- Seuil d'échec systématique (`HTTP -1`) : **< 55K**
+- Marge de sécurité réelle : **~4K**
+
+**Un ajout de seulement 5KB en BSS statique, ou une augmentation de stack de 2048 bytes, ou un nouveau buffer alloué en SRAM au lieu de PSRAM, peut faire tomber `maxBlock` sous le seuil critique et rendre le fetch HTTPS impossible.** Cela a déjà été vérifié expérimentalement : la version avec 32K de réserve TLS (au lieu de 48K) et sans stacks réduites avait un `maxBlock=47K` et échouait systématiquement.
+
+### Ce qui est INTERDIT sans validation hardware
+
+| Interdiction | Exemples | Alternative |
+|---|---|---|
+| Augmenter une stack FreeRTOS | Passer Renderer de 6144 à 8192 | Ne pas le faire ; si besoin, optimiser le code appelant |
+| Ajouter des tableaux/buffers statiques en SRAM | `static uint8_t myBuf[4096];` | Allouer en PSRAM via `heap_caps_malloc(MALLOC_CAP_SPIRAM)` |
+| Déplacer des buffers PSRAM → SRAM | Repasser `CompLogos` ou `SceneManager` buffers en statique | Garder en PSRAM |
+| Ajouter de grosses structures globales | `MatchData gExtraMatches[20];` en global | Allouer dynamiquement en PSRAM |
+| Augmenter la taille de `MatchData` ou structures parsées | Ajouter des champs `String` lourds | Utiliser `char[]` fixes ou allouer en PSRAM |
+| Réduire la réserve TLS | Passer de 48K à 32K | Ne JAMAIS réduire en dessous de 48K |
+| Ajouter des `Serial.println()` complexes dans `renderTask` | Concaténation de `String` dans la boucle d'affichage | Éviter ; utiliser `printf` avec buffers statiques minimes |
+
+### Ce qui est AUTORISÉ (mais doit être loggué)
+
+- Modifications de couleurs, positions, timings d'affichage
+- Modifications de logique de parsing (tant que la taille des structures ne change pas)
+- Corrections de bugs fonctionnels
+- Ajout de scènes **si et seulement si** les buffers de la nouvelle scène sont alloués en PSRAM
+
+### Processus de vérification obligatoire avant chaque modification
+
+**Avant de modifier le moindre fichier dans `src/` ou `include/` :**
+
+1. **Identifier la zone mémoire** : la modification touche-t-elle le BSS, les stacks, le heap dynamique, ou uniquement la logique runtime ?
+2. **Si touche au BSS/stack/heap SRAM** : calculer l'impact en bytes. Une augmentation > 0 doit être justifiée.
+3. **Si impact > 0** : trouver une alternative en PSRAM ou réduire ailleurs.
+4. **Si aucune alternative** : la modification est **REJETÉE** à moins d'un test hardware validant que `maxBlock` au fetch reste > 80K.
+5. **Après build** : vérifier que `RAM: [===       ]  25.4%` (ou moins) — toute augmentation de ce pourcentage doit être expliquée.
+6. **Après flash** : vérifier dans les logs que `[FETCH] start: heap=... maxBlock=...` reste ≥ 80000. Si < 80000, **ANNULER LA MODIFICATION**.
+
+### Log de validation à inclure dans tout commit touchant au code
+
+Si une modification touche à n'importe quel fichier dans `src/` ou `include/`, le message de commit doit contenir l'une des deux phrases :
+
+```
+[MEM-IMPACT] none — modification logique/couleurs/timings uniquement
+```
+
+ou
+
+```
+[MEM-IMPACT] +XXX bytes SRAM — justifié par YYY, validated: maxBlock=ZZZZ
+```
+
+**Aucun commit sans ce tag ne doit être mergé sur `main`.**
+
+---
+
 ## Sources de données
 
 ### Priorité
