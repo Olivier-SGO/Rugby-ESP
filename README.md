@@ -187,6 +187,54 @@ Accessible sur `http://rugby-display.local` (mDNS) ou par IP.
 
 ---
 
+## ⏱️ Fréquences de rafraîchissement
+
+### Boot (`fetchAll`)
+Au démarrage, 3 requêtes sont effectuées en séquence :
+1. **Champions Cup** — calendrier complet (`fetchCalendar`)
+2. **Top 14** — résultats de la journée courante
+3. **Pro D2** — résultats de la journée courante
+
+> Les fixtures de la journée N+1 (`fetchNextJournee`) ne sont **pas** récupérées au boot — elles le sont en runtime.
+
+### Runtime (`fetchRotating`)
+Une seule compétition est fetchée par cycle, en rotation :
+```
+Top 14 → Pro D2 → CC → Top 14 → …
+```
+
+| Mode | Condition | Fréquence | Tour complet |
+|---|---|---|---|
+| **Normal** | Aucun match live | **3 min** (`POLL_NORMAL_MS`) | ~9 min |
+| **Live** | Au moins 1 match live | **30 s** (`POLL_LIVE_MS`) | ~90 s |
+
+- **Top 14 / Pro D2** : après le fetch principal, un deuxième fetch récupère les fixtures de la journée N+1
+- **Champions Cup** : un seul fetch du calendrier complet
+
+### SceneManager — Live Priority
+Dès qu'un match live est détecté dans la base, le renderer passe en **priorité live** :
+- Les scènes de matchs live sont affichées en boucle
+- Les scènes non-live (fixtures, classements) sont masquées
+- La priorité live persiste pendant **5 minutes** (`LIVE_GRACE_MS = 300000`) après la fin du dernier match live
+
+### Durées d'affichage des scènes
+
+| Scène | Durée |
+|---|---|
+| Scoreboard (résultat) | **8 s** |
+| Fixtures (programme) | **8 s** |
+| Standings (classement) | **20 s** |
+
+### Autres timers
+
+| Événement | Fréquence |
+|---|---|
+| Vérification état WiFi/NTP (task loop) | **5 s** |
+| Resync NTP | **1 h** (`NTP_INTERVAL_MS`) |
+| Rebuild des scènes si vide | **5 s** |
+
+---
+
 ## 📁 Structure du projet
 
 ```
