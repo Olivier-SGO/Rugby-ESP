@@ -496,6 +496,20 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     http.end();
     vTaskDelay(pdMS_TO_TICKS(500)); // laisser lwIP libérer le socket et le heap se stabiliser
 
+    // Determine the most advanced knockout phase present (1/8F < 1/4F < 1/2F < Finale)
+    auto knockoutOrder = [](const char* g) -> int {
+        if (strcmp(g, "1/8F") == 0) return 1;
+        if (strcmp(g, "1/4F") == 0) return 2;
+        if (strcmp(g, "1/2F") == 0) return 3;
+        if (strcmp(g, "Finale") == 0) return 4;
+        return 0;
+    };
+    int maxKnockoutPhase = 0;
+    for (int i = 0; i < tempCount; i++) {
+        int o = knockoutOrder(temp[i].group);
+        if (o > maxKnockoutPhase) maxKnockoutPhase = o;
+    }
+
     // ── Filter pools: scheduled + last 12 finished ──
     int scheduledPools = 0;
     int totalPoolFinished = 0;
@@ -522,7 +536,8 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
                 keep = false;
             }
         } else {
-            keep = true; // finals always kept
+            // Knockout finals: only keep the most advanced phase
+            keep = (knockoutOrder(temp[i].group) == maxKnockoutPhase);
         }
         if (!keep) continue;
 
