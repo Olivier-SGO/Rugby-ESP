@@ -1,6 +1,7 @@
 #include "StandingsScene.h"
 #include "CompLogos.h"
 #include "LogoLoader.h"
+#include "WiFiIcon.h"
 #include "DisplayManager.h"
 #include "config.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
@@ -71,7 +72,9 @@ void StandingsScene::render() {
     // Draw competition logo overlay last so standings scroll behind it
     {
         int lw = gCompLogoLgW[_compIdx];
-        Display.drawBitmap565(DISPLAY_W - lw - 40, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+        int logoX = DISPLAY_W - lw - 40;
+        Display.drawBitmap565(logoX, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+        drawWiFiStatusIfNeeded(logoX, 0);
     }
 
     Display.flip();

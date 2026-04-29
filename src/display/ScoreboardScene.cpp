@@ -1,6 +1,7 @@
 #include "ScoreboardScene.h"
 #include "CompLogos.h"
 #include "LogoLoader.h"
+#include "WiFiIcon.h"
 #include "config.h"
 #include "DisplayManager.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
@@ -58,7 +59,9 @@ void ScoreboardScene::drawLogos() {
 
 void ScoreboardScene::drawHeader() {
     int lw = gCompLogoLgW[_compIdx];
-    Display.drawBitmap565(CENTER_MID - lw / 2, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+    int logoX = CENTER_MID - lw / 2;
+    Display.drawBitmap565(logoX, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+    drawWiFiStatusIfNeeded(logoX, 0);
 }
 
 void ScoreboardScene::drawScores() {

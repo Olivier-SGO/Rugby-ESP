@@ -1,6 +1,7 @@
 #include "FixturesScene.h"
 #include "CompLogos.h"
 #include "LogoLoader.h"
+#include "WiFiIcon.h"
 #include "DisplayManager.h"
 #include "config.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
@@ -48,7 +49,9 @@ void FixturesScene::render() {
 
     // Competition logo header
     int lw = gCompLogoLgW[_compIdx];
-    Display.drawBitmap565(CENTER_MID - lw / 2, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+    int logoX = CENTER_MID - lw / 2;
+    Display.drawBitmap565(logoX, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
+    drawWiFiStatusIfNeeded(logoX, 0);
 
     // Round / group indicator, bottom-left corner
     if (_md.group[0]) {
