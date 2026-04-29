@@ -15,6 +15,7 @@ size_t OTAUpdater::_firmwareSize      = 0;
 size_t OTAUpdater::_littlefsSize      = 0;
 char   OTAUpdater::_lastError[64]     = {0};
 bool   OTAUpdater::_busy              = false;
+bool   gOTADownloading                = false;
 
 static constexpr const char* VERSION_URL =
     "https://github.com/Olivier-SGO/rugby-display-releases/releases/latest/download/version.json";
@@ -135,8 +136,10 @@ bool OTAUpdater::applyUpdate() {
         return false;
     }
 
+    gOTADownloading = true;
     Serial.println("[OTA] Flashing firmware...");
     if (!_flashFromURL(_firmwareURL, _firmwareSize, U_FLASH)) {
+        gOTADownloading = false;
         _busy = false;
         return false;
     }
@@ -156,12 +159,12 @@ bool OTAUpdater::applyUpdate() {
     Serial.println("[OTA] Restarting...");
     ESP.restart();
     return true; // never reached
-    // _busy intentionally not cleared — restart makes it moot
+    // gOTADownloading and _busy intentionally not cleared — restart makes it moot
 }
 
 // ── Stream a remote binary into the Update subsystem ─────────────────────────
 bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command) {
-    if (ESP.getFreeHeap() < 30000) {
+    if (ESP.getFreeHeap() < 40000) {
         snprintf(_lastError, sizeof(_lastError), "Heap too low for %s flash",
                  command == U_FLASH ? "firmware" : "filesystem");
         Serial.printf("[OTA] %s\n", _lastError);
@@ -169,7 +172,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     }
 
     HTTPClient http;
-    http.setTimeout(30000);
+    http.setTimeout(60000);
     http.begin(String(url));
     http.addHeader("User-Agent", "Mozilla/5.0 (compatible; RugbyESP32/1.0)");
     const char* locKey = "Location";
@@ -228,7 +231,7 @@ bool OTAUpdater::_flashFromURL(const char* url, size_t expectedSize, int command
     while (written < expectedSize) {
         size_t avail = stream->available();
         if (!avail) {
-            if (millis() - lastData > 30000) {
+            if (millis() - lastData > 120000) {
                 Serial.printf("[OTA] Read timeout at %zu / %zu bytes\n", written, expectedSize);
                 break;
             }

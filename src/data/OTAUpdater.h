@@ -30,3 +30,6 @@ private:
     static char   _lastError[64];
     static bool   _busy;
 };
+
+// Global flag to prevent DataFetcher from running during OTA download
+extern bool gOTADownloading;

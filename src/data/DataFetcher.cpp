@@ -1,6 +1,7 @@
 #include "DataFetcher.h"
 #include "IdalgoParser.h"
 #include "WiFiManager.h"
+#include "OTAUpdater.h"
 #include <WiFi.h>
 #include "config.h"
 #include "DisplayPrefs.h"
@@ -119,6 +120,10 @@ void DataFetcher::loop() {
     if (!_wifiOk) { connectWiFi(); return; }
     if (!_timeSynced) { syncNTP(); return; }
 
+    if (gOTADownloading) {
+        Serial.println("[FETCH] OTA download in progress, skipping fetch");
+        return;
+    }
     uint32_t pollMs = _db->hasLive() ? POLL_LIVE_MS : POLL_NORMAL_MS;
     if (now - _lastIdalgo > pollMs || _lastIdalgo == 0) {
         fetchRotating();
