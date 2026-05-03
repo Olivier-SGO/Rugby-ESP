@@ -2,11 +2,13 @@
 #include "IdalgoParser.h"
 #include "WiFiManager.h"
 #include "OTAUpdater.h"
+#include "SceneManager.h"
 #include <WiFi.h>
 #include "config.h"
 #include "DisplayPrefs.h"
 #include <Arduino.h>
 #include <esp_heap_caps.h>
+#include <climits>
 
 extern uint8_t* gTLSReserve;
 bool gFetching = false;
@@ -34,6 +36,55 @@ static void reclaimTLSReserve() {
             Serial.println("[HEAP] WARNING: failed to reclaim TLS reserve");
         }
     }
+}
+
+// Return the index (0=Top14, 1=ProD2, 2=CC) of the competition that has
+// a match within the hot window (-30 min … +3 h around kickoff).
+static int hotCompetitionIndex(const CompetitionData* t14,
+                                const CompetitionData* pd2,
+                                const CompetitionData* cc,
+                                const DisplayPrefs& prefs) {
+    time_t now = time(nullptr);
+    if (now <= 0) return -1;
+    const time_t HOT_BEFORE = 30 * 60;   // 30 min before kickoff
+    const time_t HOT_AFTER  = 30 * 60;  // 3 hours after kickoff
+
+    auto compHotness = [&](const CompetitionData* d) -> int {
+        if (!d) return INT_MAX;
+        int best = INT_MAX;
+        for (int i = 0; i < d->result_count; i++) {
+            time_t ko = d->results[i].kickoff_utc;
+            if (ko <= 0) continue;
+            time_t delta = now - ko;
+            if (delta >= -HOT_BEFORE && delta <= HOT_AFTER) {
+                int absDelta = delta < 0 ? -(int)delta : (int)delta;
+                if (absDelta < best) best = absDelta;
+            }
+        }
+        for (int i = 0; i < d->fixture_count; i++) {
+            time_t ko = d->fixtures[i].kickoff_utc;
+            if (ko <= 0) continue;
+            time_t delta = now - ko;
+            if (delta >= -HOT_BEFORE && delta <= HOT_AFTER) {
+                int absDelta = delta < 0 ? -(int)delta : (int)delta;
+                if (absDelta < best) best = absDelta;
+            }
+        }
+        return best;
+    };
+
+    int bestIdx = -1;
+    int bestScore = INT_MAX;
+    const CompetitionData* comps[3] = {t14, pd2, cc};
+    for (int i = 0; i < 3; i++) {
+        if (!prefs.comp[i].enabled) continue;
+        int h = compHotness(comps[i]);
+        if (h < bestScore) {
+            bestScore = h;
+            bestIdx = i;
+        }
+    }
+    return bestIdx;
 }
 
 DataFetcher Fetcher;
@@ -156,6 +207,24 @@ void DataFetcher::loop() {
         return;
     }
     uint32_t pollMs = _db->hasLive() ? POLL_LIVE_MS : POLL_NORMAL_MS;
+    if (pollMs == POLL_NORMAL_MS) {
+        DisplayPrefs prefs;
+        loadDisplayPrefs(prefs);
+        const CompetitionData *t14 = nullptr, *pd2 = nullptr, *cc = nullptr;
+        _db->acquireAll(t14, pd2, cc);
+        int hot = hotCompetitionIndex(t14, pd2, cc, prefs);
+        _db->releaseAll();
+        if (hot >= 0) {
+            pollMs = POLL_HOT_MS;
+            static int lastLoggedHot = -1;
+            if (hot != lastLoggedHot) {
+                lastLoggedHot = hot;
+                const char* names[] = {"Top14", "ProD2", "CC"};
+                Serial.printf("[FETCH] Hot competition detected: %s → fast poll %us\n",
+                              names[hot], POLL_HOT_MS / 1000);
+            }
+        }
+    }
     if (now - _lastIdalgo > pollMs || _lastIdalgo == 0) {
         fetchRotating();
         _lastIdalgo = now;
@@ -168,24 +237,38 @@ void DataFetcher::loop() {
 
 void DataFetcher::fetchRotating() {
     FetchingFlag fetching;
-    if (_rendererHandle) vTaskSuspend(_rendererHandle);
 
     if (WiFi.status() != WL_CONNECTED) {
-        if (_rendererHandle) vTaskResume(_rendererHandle);
         return;
     }
+
+    UBaseType_t stackStart = uxTaskGetStackHighWaterMark(nullptr);
+    Serial.printf("[STACK] fetchRotating start: high-water=%u\n", stackStart);
 
     releaseTLSReserve();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     if (ESP.getFreeHeap() < 50000) {
         Serial.printf("[FETCH] freeHeap=%u < 50K, skipping fetchRotating\n", ESP.getFreeHeap());
-        if (_rendererHandle) vTaskResume(_rendererHandle);
         return;
     }
 
     DisplayPrefs prefs;
     loadDisplayPrefs(prefs);
+
+    // If a competition has an imminent/in-progress match, ensure it is
+    // fetched on the next cycle by skipping the rotation index to it.
+    {
+        const CompetitionData *t14 = nullptr, *pd2 = nullptr, *cc = nullptr;
+        _db->acquireAll(t14, pd2, cc);
+        int hot = hotCompetitionIndex(t14, pd2, cc, prefs);
+        _db->releaseAll();
+        if (hot >= 0 && (_fetchIndex % 3) != hot) {
+            _fetchIndex = hot;
+            const char* names[] = {"Top14", "ProD2", "CC"};
+            Serial.printf("[FETCH] Rotating skip to hot: %s\n", names[hot]);
+        }
+    }
 
     IdalgoParser idalgo;
 
@@ -203,7 +286,7 @@ void DataFetcher::fetchRotating() {
             if (d) {
                 memset(d, 0, sizeof(CompetitionData));
                 if (idalgo.fetch(top14Base, *d)) {
-                    fetchNextJournee(*d, top14Base, idalgo);
+                    if (d->fixture_count == 0) fetchNextJournee(*d, top14Base, idalgo);
                     _db->updateTop14(*d);
                     fetched = true;
                 }
@@ -215,7 +298,7 @@ void DataFetcher::fetchRotating() {
             if (d) {
                 memset(d, 0, sizeof(CompetitionData));
                 if (idalgo.fetch(prod2Base, *d)) {
-                    fetchNextJournee(*d, prod2Base, idalgo);
+                    if (d->fixture_count == 0) fetchNextJournee(*d, prod2Base, idalgo);
                     _db->updateProd2(*d);
                     fetched = true;
                 }
@@ -239,14 +322,19 @@ void DataFetcher::fetchRotating() {
         _firstFetchDone = true;
         Serial.printf("[FETCH] Rotating persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
         _db->persist();
+        Scenes.markDirty();
     }
 
+    UBaseType_t stackEnd = uxTaskGetStackHighWaterMark(nullptr);
+    Serial.printf("[STACK] fetchRotating end: high-water=%u (start=%u)\n", stackEnd, stackStart);
+
     reclaimTLSReserve();
-    if (_rendererHandle) vTaskResume(_rendererHandle);
 }
 
 void DataFetcher::fetchAll(bool forceAll) {
     FetchingFlag fetching;
+    UBaseType_t stackStart = uxTaskGetStackHighWaterMark(nullptr);
+    Serial.printf("[STACK] fetchAll start: high-water=%u\n", stackStart);
     if (_rendererHandle) vTaskSuspend(_rendererHandle);
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -284,50 +372,112 @@ void DataFetcher::fetchAll(bool forceAll) {
 
     Serial.printf("[FETCH] start: heap=%u maxBlock=%u psram=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getFreePsram());
 
-    bool ccOk = false;
-    if ((forceAll || prefs.comp[2].enabled) && cc) {
-        if (forceAll && !prefs.comp[2].enabled) Serial.println("[FETCH] CC forced (boot)");
-        Serial.println("[FETCH] before CC fetch");
-        ccOk = fetchCC(idalgo, *cc);
-        Serial.printf("[FETCH] after CC fetch: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
-        if (ccOk) {
-            _db->updateCC(*cc);
-            Serial.printf("[FETCH] after CC updateDB: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+    // Boot priority: fetch the competition with an imminent/in-progress match first
+    int bootOrder[3];
+    int bootOrderCount = 0;
+    bool bootFetched[3] = {false, false, false};
+    int hotIdx = -1;
+    {
+        const CompetitionData *t14 = nullptr, *pd2 = nullptr, *cc = nullptr;
+        _db->acquireAll(t14, pd2, cc);
+        hotIdx = hotCompetitionIndex(t14, pd2, cc, prefs);
+        _db->releaseAll();
+        if (hotIdx >= 0) {
+            const char* names[] = {"Top14", "ProD2", "CC"};
+            Serial.printf("[FETCH] Boot priority: %s first (hot match detected)\n", names[hotIdx]);
         }
-        vTaskDelay(pdMS_TO_TICKS(3000));
-    } else {
-        Serial.println("[FETCH] CC disabled, skipping");
+    }
+    int defaultOrder[3] = {2, 0, 1};
+    if (hotIdx >= 0) {
+        bootOrder[bootOrderCount++] = hotIdx;
+        bootFetched[hotIdx] = true;
+    }
+    for (int i = 0; i < 3; i++) {
+        int idx = defaultOrder[i];
+        if (!bootFetched[idx]) {
+            bootOrder[bootOrderCount++] = idx;
+            bootFetched[idx] = true;
+        }
     }
 
-    if ((forceAll || prefs.comp[0].enabled) && top14) {
-        if (forceAll && !prefs.comp[0].enabled) Serial.println("[FETCH] Top14 forced (boot)");
-        Serial.println("[FETCH] before Top14 fetch");
-        if (idalgo.fetch(top14Base, *top14)) {
-            Serial.println("[FETCH] Top14 fetch OK, before updateTop14");
-            _db->updateTop14(*top14);
-            Serial.println("[FETCH] after updateTop14");
-        } else {
-            Serial.println("[FETCH] Top14 fetch failed, continuing");
+    bool ccOk = false, t14Ok = false, pd2Ok = false;
+    for (int step = 0; step < bootOrderCount; step++) {
+        int idx = bootOrder[step];
+        if (idx == 2) {
+            if ((forceAll || prefs.comp[2].enabled) && cc) {
+                if (forceAll && !prefs.comp[2].enabled) Serial.println("[FETCH] CC forced (boot)");
+                for (int attempt = 0; attempt < 2 && !ccOk; attempt++) {
+                    if (attempt > 0) {
+                        Serial.println("[FETCH] CC retry after 2s...");
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                    }
+                    Serial.println("[FETCH] before CC fetch");
+                    ccOk = fetchCC(idalgo, *cc);
+                }
+                Serial.printf("[FETCH] after CC fetch: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+                if (ccOk) {
+                    _db->updateCC(*cc);
+                    Serial.printf("[FETCH] after CC updateDB: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+                }
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            } else {
+                Serial.println("[FETCH] CC disabled, skipping");
+            }
+        } else if (idx == 0) {
+            if ((forceAll || prefs.comp[0].enabled) && top14) {
+                if (forceAll && !prefs.comp[0].enabled) Serial.println("[FETCH] Top14 forced (boot)");
+                bool ok = false;
+                for (int attempt = 0; attempt < 2 && !ok; attempt++) {
+                    if (attempt > 0) {
+                        Serial.println("[FETCH] Top14 retry after 2s...");
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                    }
+                    Serial.println("[FETCH] before Top14 fetch");
+                    ok = idalgo.fetch(top14Base, *top14);
+                }
+                if (ok) {
+                    Serial.println("[FETCH] Top14 fetch OK, before updateTop14");
+                    _db->updateTop14(*top14);
+                    fetchNextJournee(*top14, top14Base, idalgo);
+                    Serial.println("[FETCH] after updateTop14");
+                } else {
+                    Serial.println("[FETCH] Top14 fetch failed, continuing");
+                }
+                Serial.printf("[FETCH] after Top14: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            } else {
+                Serial.println("[FETCH] Top14 disabled, skipping");
+            }
+        } else if (idx == 1) {
+            if ((forceAll || prefs.comp[1].enabled) && prod2) {
+                if (forceAll && !prefs.comp[1].enabled) Serial.println("[FETCH] ProD2 forced (boot)");
+                bool ok = false;
+                for (int attempt = 0; attempt < 2 && !ok; attempt++) {
+                    if (attempt > 0) {
+                        Serial.println("[FETCH] ProD2 retry after 2s...");
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                    }
+                    Serial.println("[FETCH] before ProD2 fetch");
+                    ok = idalgo.fetch(prod2Base, *prod2);
+                }
+                if (ok) {
+                    Serial.println("[FETCH] ProD2 fetch OK, before updateProd2");
+                    _db->updateProd2(*prod2);
+                    fetchNextJournee(*prod2, prod2Base, idalgo);
+                    Serial.println("[FETCH] after updateProd2");
+                } else {
+                    Serial.println("[FETCH] ProD2 fetch failed, continuing");
+                }
+                Serial.printf("[FETCH] after ProD2: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            } else {
+                Serial.println("[FETCH] ProD2 disabled, skipping");
+            }
         }
-        Serial.printf("[FETCH] after Top14: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
-        vTaskDelay(pdMS_TO_TICKS(3000));
-    } else {
-        Serial.println("[FETCH] Top14 disabled, skipping");
-    }
-
-    if ((forceAll || prefs.comp[1].enabled) && prod2) {
-        if (forceAll && !prefs.comp[1].enabled) Serial.println("[FETCH] ProD2 forced (boot)");
-        Serial.println("[FETCH] before ProD2 fetch");
-        if (idalgo.fetch(prod2Base, *prod2)) {
-            Serial.println("[FETCH] ProD2 fetch OK, before updateProd2");
-            _db->updateProd2(*prod2);
-            Serial.println("[FETCH] after updateProd2");
-        } else {
-            Serial.println("[FETCH] ProD2 fetch failed, continuing");
+        if (_db->hasLive()) {
+            Serial.println("[FETCH] Live detected — aborting fetchAll");
+            break;
         }
-        Serial.printf("[FETCH] after ProD2: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
-    } else {
-        Serial.println("[FETCH] ProD2 disabled, skipping");
     }
 
 fetchCleanup:
@@ -340,6 +490,10 @@ fetchCleanup:
     Serial.printf("[FETCH] before persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
     _db->persist();
     Serial.printf("[FETCH] done persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+    Scenes.markDirty();
+
+    UBaseType_t stackEnd = uxTaskGetStackHighWaterMark(nullptr);
+    Serial.printf("[STACK] fetchAll end: high-water=%u (start=%u)\n", stackEnd, stackStart);
 
     reclaimTLSReserve();
     if (_rendererHandle) vTaskResume(_rendererHandle);
@@ -362,8 +516,89 @@ static bool isDuplicateMatch(const CompetitionData& d, const MatchData& m, bool 
 }
 
 bool DataFetcher::fetchCC(IdalgoParser& idalgo, CompetitionData& d) {
-    // Single calendar page covers pools + all final phases
-    return idalgo.fetchCalendar("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup/calendrier", d);
+    // 1. Calendar page: complete fixtures + historical results (pools + knockouts)
+    bool ok = idalgo.fetchCalendar("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup/calendrier", d);
+    if (!ok) return false;
+
+    // 2. Results page: live scores for the current knockout phase.
+    // Only fetched when a match is in the hot window (-30 min … +3 h) to
+    // save heap / TLS handshakes during quiet periods.
+    time_t now = time(nullptr);
+    bool needLive = false;
+    if (now > 0) {
+        for (int i = 0; i < d.result_count && !needLive; i++) {
+            time_t ko = d.results[i].kickoff_utc;
+            if (ko > 0 && now >= ko - 30 * 60 && now <= ko + 30 * 60) needLive = true;
+        }
+        for (int i = 0; i < d.fixture_count && !needLive; i++) {
+            time_t ko = d.fixtures[i].kickoff_utc;
+            if (ko > 0 && now >= ko - 30 * 60 && now <= ko + 30 * 60) needLive = true;
+        }
+    }
+
+    if (needLive) {
+        Serial.println("[FETCH] CC hot — fetching results page for live scores");
+        // Let lwIP / heap stabilise after the calendar TLS session before a second handshake
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        if (ESP.getFreeHeap() < 50000) {
+            Serial.printf("[FETCH] CC results skipped: freeHeap=%u < 50K after calendar\n", ESP.getFreeHeap());
+        } else {
+            CompetitionData* live = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
+            if (!live) {
+                Serial.println("[FETCH] CC live alloc failed — keeping calendar data only");
+            } else {
+                memset(live, 0, sizeof(CompetitionData));
+                if (idalgo.fetch("https://www.ladepeche.fr/sports/resultats-sportifs/rugby/champions-cup/resultats", *live)) {
+                    // Merge live data into calendar data (results page wins)
+                    for (int i = 0; i < live->result_count; i++) {
+                        int idx = -1;
+                        for (int j = 0; j < d.result_count; j++) {
+                            if (strcmp(d.results[j].home_slug, live->results[i].home_slug) == 0 &&
+                                strcmp(d.results[j].away_slug, live->results[i].away_slug) == 0) {
+                                idx = j; break;
+                            }
+                        }
+                        if (idx >= 0) {
+                            d.results[idx] = live->results[i];
+                        } else if (d.result_count < CompetitionData::MAX_MATCHES) {
+                            d.results[d.result_count++] = live->results[i];
+                        }
+                    }
+                    for (int i = 0; i < live->fixture_count; i++) {
+                        int idx = -1;
+                        for (int j = 0; j < d.fixture_count; j++) {
+                            if (strcmp(d.fixtures[j].home_slug, live->fixtures[i].home_slug) == 0 &&
+                                strcmp(d.fixtures[j].away_slug, live->fixtures[i].away_slug) == 0) {
+                                idx = j; break;
+                            }
+                        }
+                        if (idx >= 0) {
+                            d.fixtures[idx] = live->fixtures[i];
+                        } else if (d.fixture_count < CompetitionData::MAX_MATCHES) {
+                            d.fixtures[d.fixture_count++] = live->fixtures[i];
+                        }
+                    }
+                    // Remove from fixtures any match that now appears in results
+                    for (int i = 0; i < live->result_count; i++) {
+                        for (int j = 0; j < d.fixture_count; j++) {
+                            if (strcmp(d.fixtures[j].home_slug, live->results[i].home_slug) == 0 &&
+                                strcmp(d.fixtures[j].away_slug, live->results[i].away_slug) == 0) {
+                                for (int k = j; k < d.fixture_count - 1; k++) d.fixtures[k] = d.fixtures[k + 1];
+                                d.fixture_count--;
+                                break;
+                            }
+                        }
+                    }
+                    Serial.printf("[FETCH] CC merged %d results + %d fixtures from results page\n",
+                                  live->result_count, live->fixture_count);
+                } else {
+                    Serial.println("[FETCH] CC results page fetch failed — keeping calendar data only");
+                }
+                heap_caps_free(live);
+            }
+        }
+    }
+    return true;
 }
 
 void DataFetcher::fetchNextJournee(CompetitionData& d, const char* compPath,

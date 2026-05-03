@@ -18,9 +18,10 @@ public:
                        int16_t* x1, int16_t* y1, uint16_t* w, uint16_t* h,
                        const GFXfont* font = nullptr);
 
-    // Draw a preloaded RGB565 bitmap (from LittleFS)
+    // Draw a preloaded RGB565 bitmap (from LittleFS or flash)
+    // swap=false for flash constants (already native endian), swap=true for .bin files (big-endian)
     void drawBitmap565(int16_t x, int16_t y, int16_t w, int16_t h,
-                       const uint16_t* bmp);
+                       const uint16_t* bmp, bool swap = true);
 
     // Draw text with a 1px dark-gray drop shadow (+1,+1 offset)
     void drawTextShadow(int16_t x, int16_t y, const char* str, uint16_t color,

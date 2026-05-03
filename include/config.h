@@ -7,7 +7,7 @@
 //  Validated: boot fetch 3 comps, HTML entities decode, div_idalgo delimiter,
 //             full-page parse (PSRAM), Web UI, LittleFS, logos, standings
 // ═════════════════════════════════════════════════════════════════════════════
-#define FIRMWARE_VERSION "1.3.4"
+#define FIRMWARE_VERSION "1.3.5"
 
 // ── Display ──────────────────────────────────────────────────────────────────
 #define PANEL_W       128
@@ -39,8 +39,9 @@
 #define SCENE_STANDING_MS   20000
 #define POLL_LIVE_MS        30000
 #define POLL_NORMAL_MS      180000    // 3 min — rotating fetch, one comp per cycle
+#define POLL_HOT_MS         60000     // 1 min — fast poll when an imminent match is known
 #define NTP_INTERVAL_MS     3600000   // 1 hr
-#define LIVE_GRACE_MS       300000    // 5 min
+#define LIVE_GRACE_MS       600000    // 10 min
 #define WDT_TIMEOUT_S       30
 
 // ── Logos ─────────────────────────────────────────────────────────────────────

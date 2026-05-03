@@ -3,12 +3,14 @@
 #include "DisplayPrefs.h"
 #include "DisplayManager.h"
 #include "WiFiIcon.h"
+#include "DataFetcher.h"
 #include "config.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
 #include <Arduino.h>
 #include <WiFi.h>
 
 SceneManager Scenes;
+extern volatile bool gBootFetchInProgress;
 
 // Chronological order for CC knockout phases (pools < 1/8 < 1/4 < 1/2 < Finale)
 static int ccPhaseOrder(const char* group) {
@@ -44,15 +46,23 @@ void SceneManager::tick() {
             lastEmptyRender = millis();
             Display.fillScreen(C_BLACK);
             const GFXfont* f8 = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
-            const char* msg1 = "EN ATTENTE";
-            const char* msg2 = "DE DONNEES";
+            const char* msg1;
+            const char* msg2;
+            uint16_t color = C_GOLD;
+            if (gBootFetchInProgress || Fetcher.isWiFiConnected()) {
+                msg1 = "FETCH";
+                msg2 = "EN COURS";
+            } else {
+                msg1 = "EN ATTENTE";
+                msg2 = "DE DONNEES";
+            }
             int16_t x1, y1; uint16_t tw, th;
             Display.getTextBounds(msg1, 0, 0, &x1, &y1, &tw, &th, f8);
-            Display.drawTextRelief(CENTER_MID - tw/2, 22, msg1, C_GOLD, f8);
+            Display.drawTextRelief(CENTER_MID - tw/2, 22, msg1, color, f8);
             Display.getTextBounds(msg2, 0, 0, &x1, &y1, &tw, &th, f8);
-            Display.drawTextRelief(CENTER_MID - tw/2, 40, msg2, C_GOLD, f8);
-            if (WiFi.status() != WL_CONNECTED) {
-                Display.drawBitmap565(CENTER_MID - 8, 50, 16, 16, WIFI_DISCONNECTED_ICON);
+            Display.drawTextRelief(CENTER_MID - tw/2, 40, msg2, color, f8);
+            if (!gBootFetchInProgress && !Fetcher.isWiFiConnected()) {
+                Display.drawBitmap565(CENTER_MID - 8, 50, 16, 16, WIFI_DISCONNECTED_ICON, false);
             }
             Display.flip();
         }
@@ -271,16 +281,22 @@ void SceneManager::rebuildSlots() {
     int t14r = -1, t14f = -1, pd2r = -1, pd2f = -1, ccr = -1, ccf = -1;
     const CompetitionData* t14 = _db->acquireTop14();
     if (t14) { t14r = t14->result_count; t14f = t14->fixture_count; addComp(t14, 0); _db->release(); }
+    else { Serial.println("[SCENE] acquireTop14 timeout"); }
     const CompetitionData* pd2 = _db->acquireProd2();
     if (pd2) { pd2r = pd2->result_count; pd2f = pd2->fixture_count; addComp(pd2, 1); _db->release(); }
+    else { Serial.println("[SCENE] acquireProd2 timeout"); }
     const CompetitionData* cc  = _db->acquireCC();
     if (cc)  { ccr = cc->result_count;  ccf = cc->fixture_count;  addComp(cc,  2); _db->release(); }
+    else { Serial.println("[SCENE] acquireCC timeout"); }
 
     changed = (_slotCount != lastSlotCount);
     lastSlotCount = _slotCount;
     if (changed) {
-        Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d)\n",
-                      _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf);
+        Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d) prefs=T14:%d/%d/%d PD2:%d/%d/%d CC:%d/%d/%d\n",
+                      _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf,
+                      prefs.comp[0].enabled, prefs.comp[0].scores, prefs.comp[0].fixtures,
+                      prefs.comp[1].enabled, prefs.comp[1].scores, prefs.comp[1].fixtures,
+                      prefs.comp[2].enabled, prefs.comp[2].scores, prefs.comp[2].fixtures);
     }
 
     if (_slotCount == 0) return;

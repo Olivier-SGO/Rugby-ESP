@@ -113,13 +113,25 @@ static void renderTask(void*) {
 
 // ── Boot fetch task (Core 0, 16KB stack — avoids setup() stack overflow) ─────
 static volatile bool s_bootFetchDone = false;
+volatile bool gBootFetchInProgress = true;
 static void bootFetchTask(void*) {
     vTaskDelay(pdMS_TO_TICKS(2000)); // laisser le WiFi s'initialiser
-    if (rendererHandle) vTaskSuspend(rendererHandle); // stop render allocs during fetch
+    // Connect WiFi first while renderer is still running so it can update
+    // the empty-screen message (FETCH EN COURS vs EN ATTENTE DE DONNEES)
     Fetcher.connectWiFi();
+    if (Fetcher.isWiFiConnected()) {
+        Scenes.markDirty(); // force re-render with updated WiFi state
+        vTaskDelay(pdMS_TO_TICKS(150)); // let renderer draw one frame
+    }
+    bool cachedLive = DB.hasLive();
+    if (!cachedLive && rendererHandle) vTaskSuspend(rendererHandle); // stop render allocs during fetch
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
 
-    Fetcher.fetchAll(true);
+    if (cachedLive) {
+        Serial.println("[BOOT] Live match in cache — skipping fetchAll, rotating will catch up");
+    } else {
+        Fetcher.fetchAll(true);
+    }
 
     // OTA auto-check AFTER Idalgo fetches — match data is already cached
     // Release TLS reserve so the GitHub handshake has a clean contiguous block.
@@ -143,6 +155,7 @@ static void bootFetchTask(void*) {
     UBaseType_t hw = uxTaskGetStackHighWaterMark(nullptr);
     Serial.printf("[STACK] BootFetch high-water: %u bytes\n", hw);
 
+    gBootFetchInProgress = false;
     s_bootFetchDone = true;
     vTaskDelete(nullptr);
 }
@@ -289,6 +302,9 @@ void loop() {
     static uint32_t apStartedAt = 0;
     if (bootFetchHandled && servicesStarted) {
         if (WiFi.status() == WL_CONNECTED) {
+            if (wifiDisconnectedSince > 0) {
+                Scenes.markDirty(); // re-render now that WiFi is back
+            }
             wifiDisconnectedSince = 0;
             if (apStarted) {
                 WiFiManager::stopAP();

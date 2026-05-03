@@ -44,8 +44,9 @@
    [MatchDB]          [HUB75 DMA]
 ```
 
-- **Core 0** — Fetch HTTP, parsing HTML/JSON, NTP, OTA (stack 20KB)
-- **Core 1** — Rendu 30fps DMA HUB75 (stack 10KB)
+- **Core 0** — Fetch HTTP, parsing HTML/JSON, NTP, OTA (stack 8KB)
+- **Core 1** — Rendu 30fps DMA HUB75 (stack 6KB)
+- **Boot fetch** — Tâche dédiée au boot, stack 12KB
 - **Client TLS frais par requête** — évite la corruption mbedtls
 
 ### Partition Flash
@@ -147,7 +148,7 @@ L'écran alterne automatiquement entre les scènes (rotation toutes les ~10s) :
 ### Automatique
 
 1. Activer **"Mise à jour automatique"** dans la Web UI
-2. Au prochain boot, l'ESP vérifie [GitHub Releases](https://github.com/Olivier-SGO/Rugby-ESP/releases/latest/download/version.json)
+2. Au prochain boot, l'ESP vérifie [GitHub Releases](https://github.com/Olivier-SGO/rugby-display-releases/releases/latest/download/version.json)
 3. Si une nouvelle version existe : téléchargement → flash firmware → flash LittleFS → redémarrage
 
 ### Manuelle
@@ -159,7 +160,7 @@ Uploader un `.bin` directement depuis la Web UI :
 ### Créer une release
 
 ```bash
-bash tools/create_release.sh v1.2.0
+bash tools/create_release.sh v1.3.4
 ```
 
 Le script compile, génère `version.json`, et pousse les assets sur le repo public [**rugby-display-releases**](https://github.com/Olivier-SGO/rugby-display-releases). Le code source reste privé sur ce repo.
@@ -178,6 +179,7 @@ Accessible sur `http://rugby-display.local` (mDNS) ou par IP.
 | `/config` | POST | Luminosité |
 | `/wifi` | GET/POST | Réseaux WiFi configurés |
 | `/scan` | GET | Scan des réseaux disponibles |
+| `/next-scene` | GET | Forcer le changement de scène |
 | `/update/status` | GET | État OTA |
 | `/update/check` | POST | Vérifier si une mise à jour est disponible |
 | `/update/auto` | POST | Activer/désactiver auto-update |
@@ -274,7 +276,9 @@ src/
     StandingsScene.cpp/h
     LogoLoader.cpp/h      # Chargement .bin RGB565 depuis LittleFS
     LogoCache.cpp/h       # Cache logos en PSRAM
-    CompLogos.cpp/h       # Buffers statiques pour logos compétition
+    CompLogos.cpp/h       # Buffers compétition en PSRAM
+    WiFiIcon.h            # Icône WiFi déconnecté 16×16
+    ButtonManager.cpp/h   # Boutons physiques UP/DOWN
   web/
     WebUI.cpp/h         # Serveur web synchrone
 

@@ -71,13 +71,12 @@ void DisplayManager::getTextBounds(const char* str, int16_t x, int16_t y,
 }
 
 void DisplayManager::drawBitmap565(int16_t x, int16_t y, int16_t w, int16_t h,
-                                    const uint16_t* bmp) {
+                                    const uint16_t* bmp, bool swap) {
     if (!_panel) return;
     for (int16_t row = 0; row < h; row++) {
         for (int16_t col = 0; col < w; col++) {
             uint16_t px = bmp[row * w + col];
-            // swap bytes (big-endian storage → little-endian RGB565)
-            px = (px >> 8) | (px << 8);
+            if (swap) px = (px >> 8) | (px << 8);
             if (px != 0x0000) // skip pure black = transparent
                 _panel->drawPixel(x + col, y + row, px);
         }

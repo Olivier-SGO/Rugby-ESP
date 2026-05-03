@@ -113,7 +113,7 @@ bash tools/gen_fonts.sh                 # régénère les headers de fonts dans 
 **Règle** : `heap_caps_malloc_extmem_enable()` est **intentionnellement désactivé** (Bug 13). Les gros buffers doivent être alloués explicitement en PSRAM via `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`.
 
 Le boot séquentiel libère la RAM avant `Display.begin()` :
-1. Boot fetch WiFi+HTTP en tâche dédiée (16KB stack, Core 0)
+1. Boot fetch WiFi+HTTP en tâche dédiée (12KB stack, Core 0)
 2. WiFi OFF pour libérer ~134KB de SRAM contiguë
 3. `Display.begin()` alloue les buffers DMA
 4. Reconnexion WiFi par `DataFetcher` en tâche périodique
@@ -155,9 +155,12 @@ src/
     FixturesScene.cpp/h
     StandingsScene.cpp/h
     LogoLoader.cpp/h    # Chargement .bin RGB565 depuis LittleFS
-    CompLogos.cpp/h     # Buffers statiques pour logos de compétition
+    LogoCache.cpp/h     # Cache logos 64×64 en PSRAM (2 slots)
+    CompLogos.cpp/h     # Buffers compétition en PSRAM (v1.3.0)
+    WiFiIcon.h          # Icône 16×16 WiFi déconnecté (bicolore)
+    ButtonManager.cpp/h # Boutons physiques UP/DOWN (GPIO 6/7)
   web/
-    WebServer.cpp/h     # ESPAsyncWebServer : /status /prefs /config /restart /next-scene
+    WebUI.cpp/h         # ESPAsyncWebServer : /status /prefs /config /restart /next-scene
 
 data/
   logos/*.bin           # Logos clubs et compétitions en RGB565 (générés par convert_logos.py)
@@ -289,6 +292,7 @@ Trois types de scènes, toutes en 256×64 pixels :
 - Scores splittés : domicile centré dans x=64–128, extérieur dans x=128–192
 - Text shadow sur abréviations et scores
 - Live : affiche les minutes écoulées au lieu de "Final"
+- **Icône WiFi déconnecté** : 16×16 bicolore (blanc + rouge) affichée sous le nom de l'équipe gauche quand WiFi est down
 
 ### FixturesScene
 - Même layout que Scoreboard mais avec date/heure au centre
@@ -310,6 +314,14 @@ Trois types de scènes, toutes en 256×64 pixels :
 - Accents strippés avant affichage (`é→e`, `è→e`, `à→a`, `ç→c`, etc.)
 
 ---
+
+## Boutons physiques
+
+Deux boutons sur la MatrixPortal S3 (UP = GPIO 6, DOWN = GPIO 7) :
+- **Appui court (< 600 ms)** : scène suivante / précédente
+- **Appui long (> 600 ms)** : luminosité +10 / −10 (persisté en NVS)
+
+Implémenté dans `ButtonManager.cpp/h`, appelé depuis `loop()`.
 
 ## Web UI
 
@@ -334,7 +346,7 @@ Page HTML servie depuis LittleFS (`data/index.html`).
 
 Au premier boot, si aucun réseau n'est enregistré, la carte démarre un AP avec portail captif. Les credentials saisis sont stockés en **NVS** (`Preferences`) — persistant aux redémarrages et aux mises à jour OTA. Modifiables via la Web UI à tout moment.
 
-Resilience WiFi : event handler sur `WIFI_EVENT_STA_DISCONNECTED` → `WiFi.reconnect()` avec backoff exponentiel.
+Resilience WiFi : check périodique toutes les 5s dans `DataFetcher::loop()`. Reconnect léger (`WiFi.reconnect()`) toutes les 5s, scan complet + tri RSSI toutes les 30s. Au reconnect, `fetchRotating()` est déclenché immédiatement (v1.3.4).
 
 ---
 
@@ -352,11 +364,10 @@ Tous les kickoffs sont stockés en epoch UTC. Conversion en heure locale Paris u
 
 ## Bugs mémoire corrigés (à ne pas réintroduire)
 
-### Bug 12-bis — Stack overflow `renderTask` (2026-04-27)
-- **Symptôme** : Crash aléatoire pendant `rebuildSlots()` ou après quelques minutes d'affichage.
-- **Cause** : `renderTask` avait une stack de 4096 bytes. `SceneManager::rebuildSlots()` allouait ~3600 bytes de tableaux locaux (`MatchData live[12]`, `nonlive[12]`, `sorted[12]`) sur la stack, laissant moins de 500 bytes de marge pour la chaîne d'appel GFX.
-- **Fix** : Stack passée à **10240 bytes**. Tableaux locaux déplacés en **BSS statique** (`static MatchData liveBuf[]`).
-- **Validation** : `uxTaskGetStackHighWaterMark` affiche ~7948 bytes libres (stable).
+### Bug 12-bis — Stack overflow `renderTask` (2026-04-27, corrigé puis révisé v1.3.0)
+- **Symptôme (v1)** : Crash aléatoire pendant `rebuildSlots()` ou après quelques minutes d'affichage.
+- **Fix (v1)** : Stack passée à 10240 bytes. Tableaux locaux déplacés en BSS statique.
+- **Révision v1.3.0** : les buffers statiques en BSS consommaient du heap SRAM précieux. Ils ont été **redéplacés en PSRAM** (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`). La stack Renderer a été **réduite à 6144 bytes** (high-water stable à ~4028). La stack DataFetcher a été réduite à 8192 (was 16384) et BootFetch à 12288 (was 20480).
 
 ### Bug 13 — ArduinoJson 7 + `heap_caps_malloc_extmem_enable` (2026-04-27)
 - **Symptôme** : Crash systématique après le 3e fetch HTTP (ProD2), exactement au moment de `_db->persist()`. Le log s'arrêtait juste avant `[FETCH] done persist`.
@@ -590,6 +601,98 @@ Sans ces optimisations cumulatives, même une réserve de 48K ne suffit pas à g
 **Résultat** : transition **v1.3.1 → v1.3.2** réussie en OTA automatique sur hardware MatrixPortal S3. Firmware 1.2MB + LittleFS 4MB téléchargés et flashés sans erreur, reboot OK.
 
 > **Note** : les versions ≤ v1.3.0 ne peuvent PAS bénéficier de ces corrections par OTA (elles ont le bug). Il faut flasher manuellement v1.3.1+ pour récupérer l'OTA stable.
+
+### 12. Parsing HTML — nested elements et validation des données extraites (2026-05-03)
+
+**Problème #1 — Bloc tronqué au premier `</li>` interne** : `parseChunk` utilisait `strstr(divStart, "</li>")` pour délimiter le bloc de match. Sur les pages de finale (nombreux scorers, stats, player lists), le HTML contient des `<li>` imbriqués. Le parser s'arrêtait au premier `</li>` interne, capturant un widget au lieu du match complet.
+
+**Conséquence** : dans le bloc tronqué, `readClassText(start, "visitorteam_txt", ...)` trouvait une occurrence de la classe dans un widget interne (ex. tuile "previous meeting" ou tag de l'équipe gagnante), extrayant **"Leinster"** pour l'équipe extérieure alors que la vraie balise `a_idalgo_dom_match_match_visitorteam_txt` se trouvait après le point de troncature.
+
+**Fix** : remplacer `strstr(divStart, "</li>")` par une fonction `findBlockEnd()` qui compte la profondeur des `<li>` / `</li>` imbriqués.
+
+```cpp
+static const char* findBlockEnd(const char* start, const char* pageEnd) {
+    int depth = 0;
+    const char* p = start;
+    while (p < pageEnd) {
+        if (*p == '<') {
+            if (p + 3 < pageEnd && (strncmp(p, "<li>", 4) == 0 || strncmp(p, "<li ", 4) == 0)) {
+                depth++;
+            } else if (p + 4 < pageEnd && strncmp(p, "</li>", 5) == 0) {
+                if (depth == 0) return p + 5;
+                depth--;
+            }
+        }
+        p++;
+    }
+    return pageEnd;
+}
+```
+
+**Problème #2 — Pas de validation home ≠ away** : `parseMatchBlock` n'a jamais vérifié que les deux équipes extraites étaient différentes. Le bloc tronqué produisait un match **LEN – LEN** (Leinster vs Leinster) qui passait la déduplication par paire `(home_slug, away_slug)` car la paire était "unique".
+
+**Fix** : rejeter explicitement les matchs avec `home_slug == away_slug` :
+```cpp
+if (match.home_slug[0] && strcmp(match.home_slug, match.away_slug) == 0) {
+    Serial.printf("[WARN] Rejecting match with identical teams: %s - %s\n",
+                  match.home_slug, match.away_slug);
+    return nullptr;
+}
+```
+
+**Problème #3 — "Fin" non reconnu comme finale** : la page calendrier Champions Cup utilise `<span>Fin</span>` pour la finale. `knockoutOrder()` ne reconnaissait que `"Finale"`, donc la finale obtenait `order = 0`. Le filtrage `keep = (order >= maxKnockoutPhase) || (order == 0)` laissait alors passer tous les blocs avec groupe non reconnu (y compris les widgets parasites).
+
+**Fix** : normaliser `"Fin"` → `"Finale"` dans `parseCalendarPoolBlock` :
+```cpp
+else if (strcmp(raw, "Fin") == 0) strlcpy(match.group, "Finale", sizeof(match.group));
+```
+
+**Règle de parsing** : tout parser HTML qui repose sur `strstr(..., "</tag>")` pour délimiter un bloc doit impérativement compter la profondeur des éléments imbriqués du même type. Et toute extraction de données clés (noms d'équipes, scores) doit être validée (non vide, cohérente, pas d'identiques).
+
+### 13. Partition table — conflit `tinyuf2.bin` vs LittleFS sur MatrixPortal S3 (2026-05-03)
+
+**Problème** : le board `adafruit_matrixportal_esp32s3` définit `flash_extra_images` qui flashe automatiquement `tinyuf2.bin` (bootloader secondaire Adafruit, 170KB) à l'offset **`0x410000`**. Or notre `partitions.csv` plaçait la partition `spiffs` (LittleFS) au **même offset** `0x410000`.
+
+**Conséquences catastrophiques** :
+- Chaque `pio run --target upload` écrit `tinyuf2.bin` à `0x410000` → écrase le superblock et le début du filesystem LittleFS → `LittleFS mount failed`
+- Chaque `pio run --target uploadfs` écrit le filesystem à `0x410000` → écrase complètement `tinyuf2.bin` → bootloader secondaire corrompu → l'ESP32 reste bloqué en mode download après le flash, esptool ne communique plus
+
+**Fix #1 — Désactiver le flash automatique de `tinyuf2.bin`** dans `platformio.ini` :
+```ini
+board_build.arduino.flash_extra_images =
+```
+
+**Fix #2 — Déplacer la partition spiffs** pour laisser une marge au `tinyuf2.bin` :
+```csv
+# partitions.csv
+spiffs,   data, spiffs,  0x450000, 0x3B0000,
+```
+La zone `0x410000–0x44FFFF` (256KB) est réservée au `tinyuf2.bin`. La partition fichiers fait désormais 3,84MB (`0x3B0000`) au lieu de 4MB — largement suffisant.
+
+**Règle** : toujours vérifier que les offsets des `flash_extra_images` du board ne chevauchent pas les partitions définies dans `partitions.csv`. Sur les cartes Adafruit avec ESP32-S3, le `tinyuf2.bin` est systématiquement à `0x410000`.
+
+**Ordre de flash obligatoire** quand on modifie `partitions.csv` :
+1. `pio run -e matrixportal_s3 --target upload` (met à jour la partition table en flash)
+2. `pio run -e matrixportal_s3 --target uploadfs` (écrit les fichiers au nouvel offset)
+
+Si l'ordre est inversé, le firmware utilise l'ancienne partition table et cherche LittleFS à l'ancien offset — le mount échoue.
+
+### 14. Flash ESP32-S3 USB natif — port instable après corruption du bootloader secondaire (2026-05-03)
+
+**Problème** : sur ESP32-S3 avec USB natif (pas de bridge UART externe comme CP210x), le mécanisme de reset à 1200 baud (`use_1200bps_touch`) ne fonctionne pas correctement quand le bootloader secondaire (`tinyuf2.bin`) est corrompu. L'ESP32 reste bloqué en mode download (`rst:0x15, boot:0x0`) et esptool retourne systématiquement `Failed to connect to ESP32-S3: No serial data received`.
+
+**Symptômes** :
+- Le port `/dev/cu.usbmodem1101` existe mais esptool ne reçoit aucune donnée
+- `--before usb_reset` ne résout pas le problème si le bootloader est corrompu
+- `--before no_reset` ne fonctionne pas non plus car l'ESP32 n'est pas en mode bootloader propre
+- Le port peut afficher `Invalid head of packet (0x43)` (caractère 'C' = données du firmware ou du bootloader corrompu)
+
+**Solution** :
+1. **Power cycle complet** : débrancher/rebrancher l'USB de la MatrixPortal S3. Un simple appui sur RESET ne suffit pas toujours.
+2. **Redémarrer le Mac** : si le port USB reste dans un état instable après plusieurs tentatives de flash, le driver macOS doit être réinitialisé.
+3. Utiliser `--before usb_reset` (pas `default_reset`) pour les cartes ESP32-S3 USB natif une fois le port stable.
+
+**Règle** : ne jamais faire `uploadfs` sans s'assurer que la partition fichiers ne chevauche pas le bootloader secondaire. Si le bootloader est corrompu, le seul recours est un power cycle physique + éventuellement un redémarrage de l'hôte.
 
 ---
 

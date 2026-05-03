@@ -3,6 +3,8 @@
 #include "DisplayManager.h"
 #include <WiFi.h>
 
+extern volatile bool gBootFetchInProgress;
+
 /**
  * 16×16 RGB565 bitmap for the WiFi-disconnected icon.
  * Bicolor conversion (black / red / white) from user-supplied reference image.
@@ -31,8 +33,8 @@ static const uint16_t WIFI_DISCONNECTED_ICON[16 * 16] = {
  * Draw the WiFi disconnected icon at an arbitrary position.
  */
 inline void drawWiFiDisconnectedIconAt(int16_t x, int16_t y) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Display.drawBitmap565(x, y, 16, 16, WIFI_DISCONNECTED_ICON);
+    if (!gBootFetchInProgress && WiFi.status() != WL_CONNECTED) {
+        Display.drawBitmap565(x, y, 16, 16, WIFI_DISCONNECTED_ICON, false);
     }
 }
 
@@ -43,9 +45,9 @@ inline void drawWiFiDisconnectedIconAt(int16_t x, int16_t y) {
  * @param logoY      Y coordinate of the competition logo (top)
  */
 inline void drawWiFiStatusIfNeeded(int16_t logoLeftX, int16_t logoY) {
-    if (WiFi.status() != WL_CONNECTED) {
+    if (!gBootFetchInProgress && WiFi.status() != WL_CONNECTED) {
         // Place 18 px to the left of the logo, vertically centred within the logo height
         int16_t iconY = logoY + (LOGO_COMP_H - 16) / 2 + 2;
-        Display.drawBitmap565(logoLeftX - 18, iconY, 16, 16, WIFI_DISCONNECTED_ICON);
+        Display.drawBitmap565(logoLeftX - 18, iconY, 16, 16, WIFI_DISCONNECTED_ICON, false);
     }
 }

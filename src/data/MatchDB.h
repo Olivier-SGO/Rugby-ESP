@@ -18,6 +18,10 @@ public:
     const CompetitionData* acquireCC();
     void release();
 
+    // Single-lock acquisition for all three comps (avoids recursive-deadlock)
+    void acquireAll(const CompetitionData*& t14, const CompetitionData*& pd2, const CompetitionData*& cc);
+    void releaseAll();
+
     bool    hasLive() const;
     uint8_t liveMask() const;  // bit0=top14, bit1=prod2, bit2=cc
     void persist();

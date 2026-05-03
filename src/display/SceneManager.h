@@ -32,10 +32,10 @@ private:
     MatchDB* _db = nullptr;
     bool     _livePriority = false;
     uint32_t _lastLiveDetect = 0;
-    bool     _dirty = true;
-    bool     _needsRebuild = true; // rebuild on first tick
+    volatile bool _dirty = true;
+    volatile bool _needsRebuild = true; // rebuild on first tick
 
-    static constexpr size_t MAX_SLOTS = 48;
+    static constexpr size_t MAX_SLOTS = 60;
     SceneSlot _slots[MAX_SLOTS];
     size_t    _slotCount = 0;
     size_t    _current = 0;
@@ -45,8 +45,8 @@ private:
     void rebuildSlots();
 
     // Reusable scene objects (avoid heap churn)
-    static const int MAX_SCORE_SCENES = 12;
-    static const int MAX_FIX_SCENES   = 12;
+    static const int MAX_SCORE_SCENES = 24;
+    static const int MAX_FIX_SCENES   = 24;
     static const int MAX_STAND_SCENES = 3;
     ScoreboardScene _scoreScenes[MAX_SCORE_SCENES];
     FixturesScene   _fixScenes[MAX_FIX_SCENES];
