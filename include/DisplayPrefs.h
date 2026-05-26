@@ -1,6 +1,42 @@
 #pragma once
 #include <Preferences.h>
 
+struct SchedulePrefs {
+    bool     enabled    = false;
+    uint8_t  start_h    = 8;
+    uint8_t  start_m    = 0;
+    uint8_t  end_h      = 23;
+    uint8_t  end_m      = 0;
+    uint8_t  days       = 0x7F; // all days: bits 0-6 = Sun-Sat
+    bool     force_live = true;
+};
+
+inline void loadSchedulePrefs(SchedulePrefs& s) {
+    Preferences prefs;
+    prefs.begin("rugby", true);
+    s.enabled    = prefs.getBool("sc_en",    false);
+    s.start_h    = prefs.getUChar("sc_sh",   8);
+    s.start_m    = prefs.getUChar("sc_sm",   0);
+    s.end_h      = prefs.getUChar("sc_eh",   23);
+    s.end_m      = prefs.getUChar("sc_em",   0);
+    s.days       = prefs.getUChar("sc_days", 0x7F);
+    s.force_live = prefs.getBool("sc_fl",    true);
+    prefs.end();
+}
+
+inline void saveSchedulePrefs(const SchedulePrefs& s) {
+    Preferences prefs;
+    prefs.begin("rugby", false);
+    prefs.putBool("sc_en",    s.enabled);
+    prefs.putUChar("sc_sh",   s.start_h);
+    prefs.putUChar("sc_sm",   s.start_m);
+    prefs.putUChar("sc_eh",   s.end_h);
+    prefs.putUChar("sc_em",   s.end_m);
+    prefs.putUChar("sc_days", s.days);
+    prefs.putBool("sc_fl",    s.force_live);
+    prefs.end();
+}
+
 struct CompPrefs {
     bool enabled   = true;
     bool scores    = true;

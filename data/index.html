@@ -69,6 +69,30 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
   <span style="font-size:12px;color:#555">s</span>
 </div>
 
+<h2>Horaires</h2>
+<div class="row">
+  <input type="checkbox" id="sched-en" onchange="saveSchedule()">
+  <label for="sched-en">Activer la programmation</label>
+</div>
+<div class="row">
+  <label style="min-width:60px;font-size:14px;color:#bbb">De</label>
+  <input type="time" id="sched-start" onchange="saveSchedule()" style="background:#1a1a1a;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px">
+  <label style="min-width:60px;font-size:14px;color:#bbb;margin-left:12px">A</label>
+  <input type="time" id="sched-end" onchange="saveSchedule()" style="background:#1a1a1a;border:1px solid #444;color:#eee;border-radius:4px;padding:4px;font-size:14px">
+</div>
+<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d0" onchange="saveSchedule()"> Dim</label>
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d1" onchange="saveSchedule()"> Lun</label>
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d2" onchange="saveSchedule()"> Mar</label>
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d3" onchange="saveSchedule()"> Mer</label>
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d4" onchange="saveSchedule()"> Jeu</label>
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d5" onchange="saveSchedule()"> Ven</label>
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-d6" onchange="saveSchedule()"> Sam</label>
+</div>
+<div class="row" style="margin-top:8px">
+  <label style="font-size:13px;color:#bbb"><input type="checkbox" id="sched-fl" onchange="saveSchedule()"> Forcer l'affichage des matchs live</label>
+</div>
+
 <h2>Championnats</h2>
 <div id="save-indicator"></div>
 
@@ -440,8 +464,51 @@ loadStatus();
 loadPrefs();
 loadWifi();
 loadUpdateStatus();
+loadSchedule();
 setInterval(loadStatus, 15000);
 setInterval(loadUpdateStatus, 60000);
+
+async function loadSchedule() {
+  try {
+    const r = await fetch('/schedule');
+    const d = await r.json();
+    const pad2 = n => String(n).padStart(2,'0');
+    cb('sched-en').checked = d.enabled;
+    document.getElementById('sched-start').value = pad2(d.start_h) + ':' + pad2(d.start_m);
+    document.getElementById('sched-end').value = pad2(d.end_h) + ':' + pad2(d.end_m);
+    for (let i = 0; i < 7; i++) cb('sched-d' + i).checked = (d.days & (1 << i)) !== 0;
+    cb('sched-fl').checked = d.force_live !== false;
+  } catch(e) { console.error('loadSchedule', e); }
+}
+
+let schedTimer = null;
+function saveSchedule() {
+  clearTimeout(schedTimer);
+  schedTimer = setTimeout(doSaveSchedule, 400);
+}
+
+async function doSaveSchedule() {
+  const pad2 = n => String(n).padStart(2,'0');
+  const start = document.getElementById('sched-start').value.split(':');
+  const end   = document.getElementById('sched-end').value.split(':');
+  let days = 0;
+  for (let i = 0; i < 7; i++) { if (cb('sched-d' + i).checked) days |= (1 << i); }
+  try {
+    await fetch('/schedule', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        enabled:    cb('sched-en').checked,
+        start_h:    parseInt(start[0]) || 0,
+        start_m:    parseInt(start[1]) || 0,
+        end_h:      parseInt(end[0]) || 23,
+        end_m:      parseInt(end[1]) || 0,
+        days:       days,
+        force_live: cb('sched-fl').checked
+      })
+    });
+  } catch(e) {}
+}
 </script>
 </body>
 </html>

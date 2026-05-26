@@ -50,7 +50,7 @@ struct StandingEntry {
 };
 
 struct CompetitionData {
-    static const uint8_t MAX_MATCHES  = 12;
+    static const uint8_t MAX_MATCHES  = 16;
     static const uint8_t MAX_STANDING = 18;
 
     MatchData    results[MAX_MATCHES];

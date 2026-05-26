@@ -6,6 +6,7 @@
 struct SceneSlot {
     Scene*   scene;
     uint32_t durationMs;
+    uint8_t  compIdx; // 0=Top14, 1=ProD2, 2=CC
 };
 
 class SceneManager {
@@ -17,6 +18,8 @@ public:
 
     void nextScene();
     void prevScene();
+    void nextComp();
+    void prevComp();
     void setLivePriority(bool live);
 
     // Signal that display content needs one re-render (call after data update)
@@ -32,10 +35,10 @@ private:
     MatchDB* _db = nullptr;
     bool     _livePriority = false;
     uint32_t _lastLiveDetect = 0;
-    volatile bool _dirty = true;
-    volatile bool _needsRebuild = true; // rebuild on first tick
+    bool     _dirty = true;
+    bool     _needsRebuild = true; // rebuild on first tick
 
-    static constexpr size_t MAX_SLOTS = 60;
+    static constexpr size_t MAX_SLOTS = 72;
     SceneSlot _slots[MAX_SLOTS];
     size_t    _slotCount = 0;
     size_t    _current = 0;
@@ -45,8 +48,9 @@ private:
     void rebuildSlots();
 
     // Reusable scene objects (avoid heap churn)
-    static const int MAX_SCORE_SCENES = 24;
-    static const int MAX_FIX_SCENES   = 24;
+    // Max per comp: T14=7, PD2=8, CC pool=12 → total 27 each
+    static const int MAX_SCORE_SCENES = 32;
+    static const int MAX_FIX_SCENES   = 32;
     static const int MAX_STAND_SCENES = 3;
     ScoreboardScene _scoreScenes[MAX_SCORE_SCENES];
     FixturesScene   _fixScenes[MAX_FIX_SCENES];

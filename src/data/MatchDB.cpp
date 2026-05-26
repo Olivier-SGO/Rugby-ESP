@@ -78,17 +78,20 @@ void MatchDB::updateProd2(const CompetitionData& d) {
 }
 void MatchDB::updateCC(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    mergeCompetition(_cc, d);
+    if (d.result_count > 0 || d.fixture_count > 0) {
+        // New fetch has data: clear old results/fixtures first so stale
+        // matches from past phases don't accumulate, then merge the new data.
+        _cc.result_count  = 0;
+        _cc.fixture_count = 0;
+        mergeCompetition(_cc, d);
+    }
+    // If fetch returned nothing, preserve existing data rather than wiping CC.
     xSemaphoreGive(_mutex);
 }
 
 static const CompetitionData* acquireWithTimeout(SemaphoreHandle_t mutex, const CompetitionData* d, const char* label) {
     if (xSemaphoreTake(mutex, pdMS_TO_TICKS(3000)) != pdTRUE) {
-        TaskHandle_t holder = xQueueGetMutexHolder(mutex);
-        TaskHandle_t self = xTaskGetCurrentTaskHandle();
-        const char* holderName = holder ? pcTaskGetName(holder) : "(none)";
-        const char* selfName = self ? pcTaskGetName(self) : "?";
-        Serial.printf("MatchDB: %s mutex timeout — holder=%s self=%s\n", label, holderName, selfName);
+        Serial.printf("MatchDB: %s mutex timeout — task deadlocked?\n", label);
         return nullptr;
     }
     return d;
@@ -104,17 +107,6 @@ const CompetitionData* MatchDB::acquireCC() {
     return acquireWithTimeout(_mutex, &_cc, "CC");
 }
 void MatchDB::release() {
-    xSemaphoreGive(_mutex);
-}
-
-void MatchDB::acquireAll(const CompetitionData*& t14, const CompetitionData*& pd2, const CompetitionData*& cc) {
-    xSemaphoreTake(_mutex, portMAX_DELAY);
-    t14 = &_top14;
-    pd2 = &_prod2;
-    cc  = &_cc;
-}
-
-void MatchDB::releaseAll() {
     xSemaphoreGive(_mutex);
 }
 

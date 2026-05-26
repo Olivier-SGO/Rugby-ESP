@@ -225,6 +225,41 @@ void WebUI::begin(MatchDB* db) {
         server.send(200, "application/json", out);
     });
 
+    // ── Schedule endpoints ───────────────────────────────────────────────────
+    server.on("/schedule", HTTP_GET, []() {
+        SchedulePrefs s;
+        loadSchedulePrefs(s);
+        JsonDocument doc(&spiRamAlloc);
+        doc["enabled"]    = s.enabled;
+        doc["start_h"]    = s.start_h;
+        doc["start_m"]    = s.start_m;
+        doc["end_h"]      = s.end_h;
+        doc["end_m"]      = s.end_m;
+        doc["days"]       = s.days;
+        doc["force_live"] = s.force_live;
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
+    server.on("/schedule", HTTP_POST, []() {
+        JsonDocument doc(&spiRamAlloc);
+        if (deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok) {
+            server.send(400, "application/json", "{\"error\":\"invalid json\"}");
+            return;
+        }
+        SchedulePrefs s;
+        loadSchedulePrefs(s);
+        if (!doc["enabled"].isNull())    s.enabled    = doc["enabled"].as<bool>();
+        if (!doc["start_h"].isNull())    s.start_h    = (uint8_t)constrain((int)doc["start_h"], 0, 23);
+        if (!doc["start_m"].isNull())    s.start_m    = (uint8_t)constrain((int)doc["start_m"], 0, 59);
+        if (!doc["end_h"].isNull())      s.end_h      = (uint8_t)constrain((int)doc["end_h"],   0, 23);
+        if (!doc["end_m"].isNull())      s.end_m      = (uint8_t)constrain((int)doc["end_m"],   0, 59);
+        if (!doc["days"].isNull())       s.days       = (uint8_t)(int)doc["days"];
+        if (!doc["force_live"].isNull()) s.force_live = doc["force_live"].as<bool>();
+        saveSchedulePrefs(s);
+        server.send(200, "application/json", "{\"ok\":true}");
+    });
+
     // ── OTA update endpoints ─────────────────────────────────────────────────
     server.on("/update/status", HTTP_GET, []() {
         JsonDocument doc(&spiRamAlloc);

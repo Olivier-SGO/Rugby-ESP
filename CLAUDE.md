@@ -163,6 +163,32 @@ After boot: ~90KB free. After web services start: ~40–50KB.
 
 ---
 
+## Session History (2026-05-26)
+
+### Changes Made
+
+1. **DMA screen-dark regression fixed** — Root cause: `WiFi.mode(WIFI_STA)` + `WiFi.begin()` on Core 0 while renderer/DMA active on Core 1 corrupts DMA state. Fix: always `vTaskSuspend(rendererHandle)` BEFORE `connectWiFi()` in `bootFetchTask`. v1.3.4 bootFetch ordering restored.
+
+2. **Live-mode blocking fixed** — During `_livePriority`, `nextScene()` was blocked entirely. Now: non-live scenes are skipped, but live scenes cycle among themselves.
+
+3. **CC Finale label normalised** — ladepeche.fr uses `"Fin"` as group label, not `"Finale"`. `parseCalendarPoolBlock` now normalises `"Fin"` → `"Finale"` like it does `"1/8"` → `"1/8F"`. This was causing `maxKnockoutPhase` to stay at 3 (demi-finales) instead of 4.
+
+4. **CC stale matches fixed (MatchDB)** — `mergeCompetition` only adds/updates results, never removes them. Old pool-phase matches survived phase transitions forever once in the cache. `updateCC` now replaces the CC data entirely (`_cc = d`) instead of merging, since CC is always fetched in a single complete call.
+
+5. **CC filter hardened** — Matches with unrecognised group (empty `""`) and status Finished no longer kept as pseudo-knockout results. Only Scheduled unrecognised-group matches are preserved (safety net for future HTML changes).
+
+6. **Schedule/Programmation feature implemented** — `SchedulePrefs` in `DisplayPrefs.h` (NVS keys `sc_en`, `sc_sh/sm`, `sc_eh/em`, `sc_days`, `sc_fl`). Endpoints `/schedule` GET+POST in `WebUI.cpp`. Check in `loop()` every 30s: compares local time (Paris TZ) against configured window; sets `Display.setBrightness(0)` when off, restores saved brightness when on. NVS `brightness` key is never written as 0. "Force live" option overrides schedule when live matches are detected.
+
+7. **`gBootFetchInProgress` global added** — used by `WiFiIcon.h` to suppress the disconnected icon during initial boot fetch.
+
+### Key Rules for Future Sessions
+
+- **Never call `WiFi.mode(WIFI_STA)` or `WiFi.begin()` while the renderer task is running on Core 1** — corrupts HUB75 DMA. Always suspend renderer before any WiFi initialisation.
+- **`updateCC` replaces, `updateTop14`/`updateProd2` merge** — CC is fetched in one shot; T14/PD2 combine two separate fetches (results + next-round fixtures).
+- **CC group labels on ladepeche.fr**: `"Gr. 1"` (pool), `"1/8F"`, `"1/4F"`, `"1/2F"`, `"Fin"` (Finale — not `"Finale"`). Parser normalises `"Fin"` → `"Finale"`.
+
+---
+
 ## Session History (2026-04-19)
 
 ### Changes Made

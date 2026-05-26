@@ -101,13 +101,13 @@ void ScoreboardScene::drawScores() {
     drawWiFiDisconnectedIconAt(lc - 8, 50);
 
     // Status at very bottom center:
-    //   - Finished → "Termine" in grey
+    //   - Finished → "Final" in grey
     //   - Live     → "MT" or "45'" in green
     //   - Scheduled → nothing
     char st[16] = {};
     uint16_t stColor = C_GREY;
     if (_md.status == MatchStatus::Finished) {
-        strlcpy(st, "Termine", sizeof(st));
+        strlcpy(st, "Final", sizeof(st));
     } else if (_md.status == MatchStatus::Live) {
         stColor = C_GREEN;
         if (_md.minute == -1)    strlcpy(st, "MT", sizeof(st));

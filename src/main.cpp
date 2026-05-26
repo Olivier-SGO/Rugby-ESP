@@ -13,6 +13,7 @@
 #include <DNSServer.h>
 
 #include "config.h"
+#include "DisplayPrefs.h"
 #include "DisplayManager.h"
 #include "SceneManager.h"
 #include "MatchDB.h"
@@ -116,22 +117,11 @@ static volatile bool s_bootFetchDone = false;
 volatile bool gBootFetchInProgress = true;
 static void bootFetchTask(void*) {
     vTaskDelay(pdMS_TO_TICKS(2000)); // laisser le WiFi s'initialiser
-    // Connect WiFi first while renderer is still running so it can update
-    // the empty-screen message (FETCH EN COURS vs EN ATTENTE DE DONNEES)
+    if (rendererHandle) vTaskSuspend(rendererHandle); // stop render allocs during fetch
     Fetcher.connectWiFi();
-    if (Fetcher.isWiFiConnected()) {
-        Scenes.markDirty(); // force re-render with updated WiFi state
-        vTaskDelay(pdMS_TO_TICKS(150)); // let renderer draw one frame
-    }
-    bool cachedLive = DB.hasLive();
-    if (!cachedLive && rendererHandle) vTaskSuspend(rendererHandle); // stop render allocs during fetch
     if (Fetcher.isWiFiConnected()) Fetcher.syncNTP();
 
-    if (cachedLive) {
-        Serial.println("[BOOT] Live match in cache — skipping fetchAll, rotating will catch up");
-    } else {
-        Fetcher.fetchAll(true);
-    }
+    Fetcher.fetchAll(true);
 
     // OTA auto-check AFTER Idalgo fetches — match data is already cached
     // Release TLS reserve so the GitHub handshake has a clean contiguous block.
@@ -302,9 +292,6 @@ void loop() {
     static uint32_t apStartedAt = 0;
     if (bootFetchHandled && servicesStarted) {
         if (WiFi.status() == WL_CONNECTED) {
-            if (wifiDisconnectedSince > 0) {
-                Scenes.markDirty(); // re-render now that WiFi is back
-            }
             wifiDisconnectedSince = 0;
             if (apStarted) {
                 WiFiManager::stopAP();
@@ -362,5 +349,45 @@ void loop() {
             Scenes.markDirty();
         }
     }
+    // Schedule: turn screen on/off based on configured hours
+    if (bootFetchHandled) {
+        static uint32_t lastSchedCheck = 0;
+        static bool schedScreenOn = true;
+        if (millis() - lastSchedCheck > 30000) {
+            lastSchedCheck = millis();
+            SchedulePrefs sched;
+            loadSchedulePrefs(sched);
+            if (sched.enabled) {
+                time_t now = time(nullptr);
+                struct tm* t = localtime(&now);
+                bool dayOk = (sched.days & (1 << t->tm_wday)) != 0;
+                int nowMins  = t->tm_hour * 60 + t->tm_min;
+                int startMin = sched.start_h * 60 + sched.start_m;
+                int endMin   = sched.end_h   * 60 + sched.end_m;
+                bool timeOk  = (startMin <= endMin)
+                               ? (nowMins >= startMin && nowMins < endMin)
+                               : (nowMins >= startMin || nowMins < endMin); // overnight
+                bool shouldBeOn = dayOk && timeOk;
+                if (sched.force_live && DB.hasLive()) shouldBeOn = true;
+                if (shouldBeOn != schedScreenOn) {
+                    schedScreenOn = shouldBeOn;
+                    Preferences prefs;
+                    prefs.begin("rugby", true);
+                    int savedBright = prefs.getInt("brightness", 80);
+                    prefs.end();
+                    Display.setBrightness(shouldBeOn ? (uint8_t)savedBright : 0);
+                    Serial.printf("[SCHED] screen %s\n", shouldBeOn ? "ON" : "OFF");
+                }
+            } else if (!schedScreenOn) {
+                // Schedule disabled — ensure screen is on
+                schedScreenOn = true;
+                Preferences prefs;
+                prefs.begin("rugby", true);
+                Display.setBrightness(prefs.getInt("brightness", 80));
+                prefs.end();
+            }
+        }
+    }
+
     delay(10);
 }

@@ -36,8 +36,8 @@ void ButtonManager::update() {
         if (dur >= LONG_PRESS_MS) {
             adjustBrightness(+10);
         } else {
-            Scenes.nextScene();
-            Serial.println("[BTN] next scene");
+            Scenes.nextComp();
+            Serial.println("[BTN] next comp");
         }
         _upWasPressed = false;
         _upLastRelease = now;
@@ -53,8 +53,8 @@ void ButtonManager::update() {
         if (dur >= LONG_PRESS_MS) {
             adjustBrightness(-10);
         } else {
-            Scenes.prevScene();
-            Serial.println("[BTN] prev scene");
+            Scenes.prevComp();
+            Serial.println("[BTN] prev comp");
         }
         _downWasPressed = false;
         _downLastRelease = now;

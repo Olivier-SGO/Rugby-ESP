@@ -69,12 +69,8 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
     if (expectedSize > 0) {
         cap = (size_t)expectedSize + 1;
     } else {
-        cap = 1200000;  // CC results page can exceed 1 MB; PSRAM has plenty of room
+        cap = 524288;  // ProD2/Top14 pages can exceed 256KB; PSRAM has plenty of room
     }
-    // Hard cap to avoid runaway allocations
-    if (cap > 1200000) cap = 1200000;
-    Serial.printf("[STREAM] expectedSize=%d connected=%d avail=%d cap=%u\n",
-                  expectedSize, http.connected(), stream->available(), (unsigned)cap);
     char* buf = (char*)heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
     if (!buf) {
         Serial.printf("[OOM] readEntireStream: initial PSRAM alloc failed (%u bytes)\n", (unsigned)cap);
@@ -87,37 +83,33 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
         // Known size: read exactly expectedSize bytes (no realloc needed)
         while (len < (size_t)expectedSize) {
             int avail = stream->available();
-            if (avail <= 0) {
+            if (!avail) {
                 if (millis() - lastData > 120000) {
                     Serial.printf("[PSRAM] readEntireStream: timeout at %zu / %d bytes\n", len, expectedSize);
                     break;
                 }
-                if (!http.connected() && stream->available() <= 0) break;
+                if (!http.connected() && !stream->available()) break;
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
             int toRead = min(avail, 4096);
             int rd = stream->readBytes(buf + len, toRead);
-            if (rd < 0) {
-                Serial.printf("[PSRAM] readEntireStream: readBytes error %d at %zu / %d\n", rd, len, expectedSize);
-                break;
-            }
             len += rd;
             if (rd > 0) lastData = millis();
-            if (len > 1200000) break;
+            if (len > 600000) break;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
     } else {
         // Unknown size: read with timeout, but avoid realloc to prevent heap corruption
         while (true) {
             int avail = stream->available();
-            if (avail <= 0) {
+            if (!avail) {
                 if (millis() - lastData > 60000) break;
-                if (!http.connected() && stream->available() <= 0) break;
+                if (!http.connected() && !stream->available()) break;
                 vTaskDelay(pdMS_TO_TICKS(10));
                 continue;
             }
-            if ((size_t)len + (size_t)avail + 1 > cap) {
+            if (len + avail + 1 > cap) {
                 // Cap exceeded: abort rather than risk realloc corruption
                 Serial.printf("[PSRAM] readEntireStream: cap exceeded (%zu + %d > %zu), aborting\n", len, avail, cap);
                 heap_caps_free(buf);
@@ -125,13 +117,9 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
             }
             int toRead = min(avail, 4096);
             int rd = stream->readBytes(buf + len, toRead);
-            if (rd < 0) {
-                Serial.printf("[PSRAM] readEntireStream: readBytes error %d at %zu (unknown size)\n", rd, len);
-                break;
-            }
             len += rd;
             if (rd > 0) lastData = millis();
-            if (len > 1200000) break;
+            if (len > 600000) break;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
@@ -143,7 +131,6 @@ static char* readEntireStream(WiFiClient* stream, HTTPClient& http, size_t& outL
 
 bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     out.clear();
-    Serial.printf("[FETCH] Idalgo::fetch start: %s\n", url);
     WiFiClientSecureSmall client;
     client.setInsecure();
     client.setHandshakeTimeout(30);
@@ -175,35 +162,12 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
 
     Serial.printf("Idalgo: %u bytes total, parsing...\n", totalLen);
     parseChunk(page, totalLen, out, true);
-    Serial.println("Idalgo: parseChunk done");
     heap_caps_free(page);
     http.end();
     vTaskDelay(pdMS_TO_TICKS(500)); // laisser lwIP libérer le socket et le heap se stabiliser
     Serial.printf("Idalgo: %u bytes, %d results, %d fixtures\n",
                   totalLen, out.result_count, out.fixture_count);
     return true;
-}
-
-// Find the matching </li> for a block, accounting for nested <li> elements.
-static const char* findBlockEnd(const char* start, const char* pageEnd) {
-    int depth = 0;
-    const char* p = start;
-    while (p < pageEnd) {
-        if (*p == '<') {
-            if (p + 3 < pageEnd && (strncmp(p, "<li>", 4) == 0 || strncmp(p, "<li ", 4) == 0)) {
-                depth++;
-                p += 4;
-                continue;
-            } else if (p + 4 < pageEnd && strncmp(p, "</li>", 5) == 0) {
-                if (depth == 0) return p + 5;
-                depth--;
-                p += 5;
-                continue;
-            }
-        }
-        p++;
-    }
-    return pageEnd;
 }
 
 int IdalgoParser::parseChunk(const char* chunk, size_t len,
@@ -220,7 +184,9 @@ int IdalgoParser::parseChunk(const char* chunk, size_t len,
         const char* divStart = strstr(pos, "<div class=\"div_idalgo_dom_match div_idalgo_dom_match_rugby");
         if (!divStart) break;
 
-        const char* blockEnd = findBlockEnd(divStart, end);
+        const char* blockEnd = strstr(divStart, "</li>");
+        if (blockEnd) blockEnd += 5; // include </li>
+        else blockEnd = end;
 
         if (!isLast && blockEnd == end) break;
 
@@ -284,12 +250,7 @@ void IdalgoParser::extractRoundLinks(const char* chunk, size_t len, CompetitionD
     }
 
     const char* p = chunk;
-    int loopGuard = 0;
     while (p < end) {
-        if (++loopGuard > 1000) {
-            Serial.println("[WARN] extractRoundLinks: loop guard triggered — aborting");
-            break;
-        }
         p = strstr(p, "resultats/");
         if (!p) break;
         p += 10; // skip "resultats/"
@@ -303,7 +264,6 @@ void IdalgoParser::extractRoundLinks(const char* chunk, size_t len, CompetitionD
             p = numEnd + 9;
         } else {
             p = numEnd ? numEnd : (chunk + len);
-            if (p <= chunk + 10) p++; // ensure progress even on malformed URLs
         }
     }
 }
@@ -462,12 +422,6 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
         }
     }
 
-    if (match.home_slug[0] && strcmp(match.home_slug, match.away_slug) == 0) {
-        Serial.printf("[WARN] Rejecting match with identical teams: %s - %s\n",
-                      match.home_slug, match.away_slug);
-        return nullptr;
-    }
-
     return end;
 }
 
@@ -501,7 +455,6 @@ bool IdalgoParser::readClassText(const char* html, const char* cls, char* dst, s
 
 bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     out.clear();
-    Serial.printf("[FETCH] Idalgo::fetchCalendar start: %s\n", url);
     const int TEMP_MAX = 80;
     MatchData* temp = (MatchData*)heap_caps_malloc(sizeof(MatchData) * TEMP_MAX, MALLOC_CAP_SPIRAM);
     int tempCount = 0;
@@ -539,7 +492,6 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
 
     Serial.printf("IdalgoCalendar: %u bytes total, parsing...\n", totalLen);
     parseCalendarChunk(page, totalLen, temp, tempCount, TEMP_MAX, true);
-    Serial.println("IdalgoCalendar: parseCalendarChunk done");
     heap_caps_free(page);
     http.end();
     vTaskDelay(pdMS_TO_TICKS(500)); // laisser lwIP libérer le socket et le heap se stabiliser
@@ -601,7 +553,10 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
             if (maxKnockoutPhase == 0) {
                 keep = true; // no recognizable finals found — keep all non-pool
             } else {
-                keep = (order >= maxKnockoutPhase) || (order == 0);
+                // order==0 = unrecognized group: keep as fixture (upcoming) only,
+                // not as an old finished result that has no valid phase.
+                keep = (order >= maxKnockoutPhase) ||
+                       (order == 0 && temp[i].status == MatchStatus::Scheduled);
             }
         }
         if (!keep) continue;
@@ -674,11 +629,11 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
                 raw[i] = spanPos[i]; i++;
             }
             raw[i] = '\0';
-            // Normalise knockout phase labels (source sometimes omits the 'F')
-            if (strcmp(raw, "1/8") == 0) strlcpy(match.group, "1/8F", sizeof(match.group));
-            else if (strcmp(raw, "1/4") == 0) strlcpy(match.group, "1/4F", sizeof(match.group));
-            else if (strcmp(raw, "1/2") == 0) strlcpy(match.group, "1/2F", sizeof(match.group));
-            else if (strcmp(raw, "Fin") == 0) strlcpy(match.group, "Finale", sizeof(match.group));
+            // Normalise knockout phase labels
+            if (strcmp(raw, "1/8") == 0)       strlcpy(match.group, "1/8F",   sizeof(match.group));
+            else if (strcmp(raw, "1/4") == 0)  strlcpy(match.group, "1/4F",   sizeof(match.group));
+            else if (strcmp(raw, "1/2") == 0)  strlcpy(match.group, "1/2F",   sizeof(match.group));
+            else if (strcmp(raw, "Fin") == 0)  strlcpy(match.group, "Finale", sizeof(match.group));
             else strlcpy(match.group, raw, sizeof(match.group));
         }
     }
@@ -754,9 +709,9 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
         }
     }
 
-    // Fallback: the calendar page sometimes leaves data-state="0" even after
-    // the match ends.  If kickoff is more than 4 hours in the past, treat as
-    // Finished so the match is not lost during knockout-phase filtering.
+    // Fallback: website sometimes leaves data-state="0" even after the match ends.
+    // If kickoff is more than 4 hours in the past, treat as Finished so the
+    // match is not lost during knockout-phase filtering.
     if (match.status == MatchStatus::Scheduled && match.kickoff_utc > 0) {
         time_t now = time(nullptr);
         if (now > match.kickoff_utc + 4 * 3600) {

@@ -3,14 +3,12 @@
 #include "DisplayPrefs.h"
 #include "DisplayManager.h"
 #include "WiFiIcon.h"
-#include "DataFetcher.h"
 #include "config.h"
 #include "fonts/AtkinsonHyperlegible8pt7b.h"
 #include <Arduino.h>
 #include <WiFi.h>
 
 SceneManager Scenes;
-extern volatile bool gBootFetchInProgress;
 
 // Chronological order for CC knockout phases (pools < 1/8 < 1/4 < 1/2 < Finale)
 static int ccPhaseOrder(const char* group) {
@@ -46,23 +44,15 @@ void SceneManager::tick() {
             lastEmptyRender = millis();
             Display.fillScreen(C_BLACK);
             const GFXfont* f8 = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
-            const char* msg1;
-            const char* msg2;
-            uint16_t color = C_GOLD;
-            if (gBootFetchInProgress || Fetcher.isWiFiConnected()) {
-                msg1 = "FETCH";
-                msg2 = "EN COURS";
-            } else {
-                msg1 = "EN ATTENTE";
-                msg2 = "DE DONNEES";
-            }
+            const char* msg1 = "EN ATTENTE";
+            const char* msg2 = "DE DONNEES";
             int16_t x1, y1; uint16_t tw, th;
             Display.getTextBounds(msg1, 0, 0, &x1, &y1, &tw, &th, f8);
-            Display.drawTextRelief(CENTER_MID - tw/2, 22, msg1, color, f8);
+            Display.drawTextRelief(CENTER_MID - tw/2, 22, msg1, C_GOLD, f8);
             Display.getTextBounds(msg2, 0, 0, &x1, &y1, &tw, &th, f8);
-            Display.drawTextRelief(CENTER_MID - tw/2, 40, msg2, color, f8);
-            if (!gBootFetchInProgress && !Fetcher.isWiFiConnected()) {
-                Display.drawBitmap565(CENTER_MID - 8, 50, 16, 16, WIFI_DISCONNECTED_ICON, false);
+            Display.drawTextRelief(CENTER_MID - tw/2, 40, msg2, C_GOLD, f8);
+            if (WiFi.status() != WL_CONNECTED) {
+                Display.drawBitmap565(CENTER_MID - 8, 50, 16, 16, WIFI_DISCONNECTED_ICON);
             }
             Display.flip();
         }
@@ -90,8 +80,24 @@ void SceneManager::tick() {
     }
 
     uint32_t dur = _slots[_current].durationMs;
-    if (!_livePriority && millis() - _sceneStart > dur) {
-        nextScene();
+    if (millis() - _sceneStart > dur) {
+        if (!_livePriority) {
+            nextScene();
+        } else {
+            // Cycle through live scenes only — don't go back to non-live
+            int next = (_current + 1) % _slotCount;
+            int startAt = next;
+            do {
+                if (_slots[next].scene->isLiveMatch()) break;
+                next = (next + 1) % _slotCount;
+            } while (next != startAt);
+            if (next != _current) {
+                _current = next;
+                activateCurrent();
+                _sceneStart = millis();
+                _dirty = true;
+            }
+        }
     }
 
     static uint32_t lastRebuild = 0;
@@ -155,6 +161,46 @@ void SceneManager::setLivePriority(bool live) {
     if (live) _lastLiveDetect = millis();
 }
 
+void SceneManager::nextComp() {
+    if (_slotCount == 0) return;
+    uint8_t cur = _slots[_current].compIdx;
+    for (size_t i = 1; i <= _slotCount; i++) {
+        size_t idx = (_current + i) % _slotCount;
+        if (_slots[idx].compIdx != cur) {
+            _current = idx;
+            activateCurrent();
+            _sceneStart = millis();
+            _dirty = true;
+            return;
+        }
+    }
+}
+
+void SceneManager::prevComp() {
+    if (_slotCount == 0) return;
+    uint8_t cur = _slots[_current].compIdx;
+    // Step back to find the previous comp's first slot
+    // First find any slot of a different comp going backwards
+    size_t prevCompAny = _slotCount; // sentinel
+    for (size_t i = 1; i <= _slotCount; i++) {
+        size_t idx = (_current + _slotCount - i) % _slotCount;
+        if (_slots[idx].compIdx != cur) { prevCompAny = idx; break; }
+    }
+    if (prevCompAny == _slotCount) return;
+    // Now rewind to the first slot of that comp
+    uint8_t targetComp = _slots[prevCompAny].compIdx;
+    size_t first = prevCompAny;
+    for (size_t i = 1; i < _slotCount; i++) {
+        size_t idx = (prevCompAny + _slotCount - i) % _slotCount;
+        if (_slots[idx].compIdx != targetComp) break;
+        first = idx;
+    }
+    _current = first;
+    activateCurrent();
+    _sceneStart = millis();
+    _dirty = true;
+}
+
 void SceneManager::activateCurrent() {
     if (_slotCount > 0) _slots[_current].scene->onActivate();
     _dirty = true;
@@ -177,8 +223,9 @@ void SceneManager::rebuildSlots() {
         {"CHAMP CUP", C_PURPLE, 8, 99},
     };
 
+    int currentComp = 0;
     auto addSlot = [&](Scene* s, uint32_t ms) {
-        if (_slotCount < MAX_SLOTS) _slots[_slotCount++] = {s, ms};
+        if (_slotCount < MAX_SLOTS) _slots[_slotCount++] = {s, ms, (uint8_t)currentComp};
     };
 
     uint32_t scoreMs   = (uint32_t)prefs.score_s    * 1000;
@@ -201,6 +248,7 @@ void SceneManager::rebuildSlots() {
         if (!d) return;
         const CompPrefs& p = prefs.comp[ci];
         if (!p.enabled) return;
+        currentComp = ci;
 
         if (p.scores) {
             // Separate live matches (always first) from non-live
@@ -281,22 +329,16 @@ void SceneManager::rebuildSlots() {
     int t14r = -1, t14f = -1, pd2r = -1, pd2f = -1, ccr = -1, ccf = -1;
     const CompetitionData* t14 = _db->acquireTop14();
     if (t14) { t14r = t14->result_count; t14f = t14->fixture_count; addComp(t14, 0); _db->release(); }
-    else { Serial.println("[SCENE] acquireTop14 timeout"); }
     const CompetitionData* pd2 = _db->acquireProd2();
     if (pd2) { pd2r = pd2->result_count; pd2f = pd2->fixture_count; addComp(pd2, 1); _db->release(); }
-    else { Serial.println("[SCENE] acquireProd2 timeout"); }
     const CompetitionData* cc  = _db->acquireCC();
     if (cc)  { ccr = cc->result_count;  ccf = cc->fixture_count;  addComp(cc,  2); _db->release(); }
-    else { Serial.println("[SCENE] acquireCC timeout"); }
 
     changed = (_slotCount != lastSlotCount);
     lastSlotCount = _slotCount;
     if (changed) {
-        Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d) prefs=T14:%d/%d/%d PD2:%d/%d/%d CC:%d/%d/%d\n",
-                      _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf,
-                      prefs.comp[0].enabled, prefs.comp[0].scores, prefs.comp[0].fixtures,
-                      prefs.comp[1].enabled, prefs.comp[1].scores, prefs.comp[1].fixtures,
-                      prefs.comp[2].enabled, prefs.comp[2].scores, prefs.comp[2].fixtures);
+        Serial.printf("SceneManager: %zu slots (T14:r=%d/f=%d, PD2:r=%d/f=%d, CC:r=%d/f=%d)\n",
+                      _slotCount, t14r, t14f, pd2r, pd2f, ccr, ccf);
     }
 
     if (_slotCount == 0) return;
