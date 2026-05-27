@@ -168,6 +168,36 @@ void WebUI::begin(MatchDB* db) {
         server.send(200, "application/json", ok ? "{\"ok\":true}" : "{\"error\":\"save failed\"}");
     });
 
+    // GET /cc-debug — live dump of _cc contents from MatchDB (for verification)
+    server.on("/cc-debug", HTTP_GET, [db]() {
+        const CompetitionData* cc = db->acquireCC();
+        if (!cc) {
+            server.send(503, "application/json", "{\"error\":\"mutex timeout\"}");
+            return;
+        }
+        JsonDocument doc(&spiRamAlloc);
+        doc["result_count"]  = cc->result_count;
+        doc["fixture_count"] = cc->fixture_count;
+        auto ra = doc["results"].to<JsonArray>();
+        for (int i = 0; i < cc->result_count; i++) {
+            auto o = ra.add<JsonObject>();
+            o["home"]  = cc->results[i].home_name;
+            o["away"]  = cc->results[i].away_name;
+            o["score"] = String(cc->results[i].home_score) + "-" + String(cc->results[i].away_score);
+            o["group"] = cc->results[i].group;
+        }
+        auto fa = doc["fixtures"].to<JsonArray>();
+        for (int i = 0; i < cc->fixture_count; i++) {
+            auto o = fa.add<JsonObject>();
+            o["home"]  = cc->fixtures[i].home_name;
+            o["away"]  = cc->fixtures[i].away_name;
+            o["group"] = cc->fixtures[i].group;
+        }
+        db->release();
+        String out; serializeJson(doc, out);
+        server.send(200, "application/json", out);
+    });
+
     // GET /dump/cc — export compact binary CC data as JSON
     server.on("/dump/cc", HTTP_GET, []() {
         File f = LittleFS.open("/cc_data.bin", "r");

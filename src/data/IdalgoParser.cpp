@@ -534,8 +534,8 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
         bool isPool = (strncmp(temp[i].group, "Gr.", 3) == 0);
         bool keep = false;
         if (isPool) {
-            if (scheduledPools > 0) {
-                // Pool phase ongoing → keep scheduled + last 12 finished
+            if (scheduledPools > 0 && maxKnockoutPhase == 0) {
+                // Pool phase ongoing (no knockout results yet) → keep scheduled + last 12 finished
                 if (temp[i].status == MatchStatus::Scheduled) keep = true;
                 else if (temp[i].status == MatchStatus::Finished) {
                     poolFinishedSeen++;

@@ -82,14 +82,9 @@ void MatchDB::updateProd2(const CompetitionData& d) {
 }
 void MatchDB::updateCC(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    if (d.result_count > 0 || d.fixture_count > 0) {
-        // New fetch has data: clear old results/fixtures first so stale
-        // matches from past phases don't accumulate, then merge the new data.
-        _cc.result_count  = 0;
-        _cc.fixture_count = 0;
-        mergeCompetition(_cc, d);
-    }
-    // If fetch returned nothing, preserve existing data rather than wiping CC.
+    _cc.result_count  = 0;
+    _cc.fixture_count = 0;
+    mergeCompetition(_cc, d);
     xSemaphoreGive(_mutex);
 }
 
