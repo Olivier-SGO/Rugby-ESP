@@ -10,6 +10,10 @@ void MatchDB::begin() {
     _mutex = xSemaphoreCreateMutex();
     _top14.clear(); _prod2.clear(); _cc.clear();
     load();
+    // CC results/fixtures may be from past phases — always re-fetch at boot.
+    // Standings and round_ids are preserved from cache.
+    _cc.result_count  = 0;
+    _cc.fixture_count = 0;
 }
 
 static bool sameMatch(const MatchData& a, const MatchData& b) {
