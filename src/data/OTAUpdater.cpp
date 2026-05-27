@@ -351,9 +351,18 @@ bool OTAUpdater::_parseVersionJson(const char* json) {
 }
 
 // ── Version comparison ───────────────────────────────────────────────────────
+static int parseVersion(const char* v, int* major, int* minor, int* patch) {
+    return sscanf(v, "%d.%d.%d", major, minor, patch);
+}
+
 bool OTAUpdater::_compareVersion(const char* remote) {
-    // Exact string compare — works as long as FIRMWARE_VERSION is unique per release.
-    return strcmp(remote, FIRMWARE_VERSION) != 0;
+    int rMaj = 0, rMin = 0, rPat = 0;
+    int lMaj = 0, lMin = 0, lPat = 0;
+    if (parseVersion(remote,           &rMaj, &rMin, &rPat) < 3) return false;
+    if (parseVersion(FIRMWARE_VERSION, &lMaj, &lMin, &lPat) < 3) return false;
+    if (rMaj != lMaj) return rMaj > lMaj;
+    if (rMin != lMin) return rMin > lMin;
+    return rPat > lPat;
 }
 
 // ── Getters / setters ────────────────────────────────────────────────────────
