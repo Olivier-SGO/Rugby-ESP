@@ -203,8 +203,7 @@ void setup() {
 
     Serial.println("[TLS] max_frag_len patch: ACTIVE (4096)");
 
-    DB.begin();
-    DB.load();
+    DB.begin();  // calls load() internally, then clears CC results/fixtures
 
     // Turn WiFi off to free contiguous SRAM for Display.begin().
     // With logos in PSRAM we still have plenty of heap left for SSL later.
