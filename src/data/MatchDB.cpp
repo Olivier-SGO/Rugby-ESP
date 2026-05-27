@@ -14,6 +14,9 @@ void MatchDB::begin() {
     // Standings and round_ids are preserved from cache.
     _cc.result_count  = 0;
     _cc.fixture_count = 0;
+    // Immediately rewrite the cache so the cleared CC is on disk.
+    // If the boot fetch fails later, the NEXT boot won't reload stale CC matches.
+    persist();
 }
 
 static bool sameMatch(const MatchData& a, const MatchData& b) {
