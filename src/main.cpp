@@ -313,11 +313,11 @@ void loop() {
                     apStarted = true;
                     apStartedAt = millis();
                     Scenes.markDirty();
-                } else if (millis() - wifiDisconnectedSince > 300000) {
-                    // Saved networks but 5 min down: start AP for 2 min
+                } else if (millis() - wifiDisconnectedSince > 120000) {
+                    // 2 min of failed STA attempts: open AP for 5 min so user can connect/configure
                     WiFiManager::startAP();
                     dnsServer.start(53, "*", WiFi.softAPIP());
-                    Serial.println("AP started (5 min timeout)");
+                    Serial.println("AP started (2 min STA timeout)");
                     apStarted = true;
                     apStartedAt = millis();
                     Scenes.markDirty();
@@ -327,13 +327,13 @@ void loop() {
                 dnsServer.processNextRequest();
                 WiFiManager::loadNetworks(); // reload in case user added networks via web UI
 
-                // Stop AP after 2 min if we have saved networks (give user time to config)
-                if (WiFiManager::count > 0 && millis() - apStartedAt > 120000) {
+                // After 5 min of AP: stop and retry STA connection
+                if (WiFiManager::count > 0 && millis() - apStartedAt > 300000) {
                     WiFiManager::stopAP();
                     apStarted = false;
-                    wifiDisconnectedSince = millis(); // Reset 5 min timer
+                    wifiDisconnectedSince = millis(); // reset 2 min STA timer
                     Scenes.markDirty();
-                    Serial.println("AP stopped (2 min elapsed), back to STA");
+                    Serial.println("AP stopped (5 min elapsed), retrying STA");
                 }
             }
         }
