@@ -292,12 +292,16 @@ Trois types de scènes, toutes en 256×64 pixels :
 - Scores splittés : domicile centré dans x=64–128, extérieur dans x=128–192
 - Text shadow sur abréviations et scores
 - Live : affiche les minutes écoulées au lieu de "Final"
-- **Icône WiFi déconnecté** : 16×16 bicolore (blanc + rouge) affichée sous le nom de l'équipe gauche quand WiFi est down
+- **Icône WiFi déconnecté** : 16×16 bicolore (blanc + rouge) sous le nom de l'équipe gauche. En mode AP : texte "AP" en orange au-dessus de l'icône (police GFX built-in).
+- **Journée `J26` / groupe `P1`** : police GFX built-in 5×7, `y=56` (bas gauche)
+- **Compteur `n/total`** : police GFX built-in 5×7, `y=56` (bas droite)
 
 ### FixturesScene
 - Même layout que Scoreboard mais avec date/heure au centre
 - Kickoff TBD : date seule, pas d'heure
 - Text shadow sur tout le texte
+- **Journée / groupe et compteur** : même police GFX built-in 5×7, `y=56`
+- **Fixtures passées filtrées** : `kickoff_utc > 0 && kickoff_utc < now - 7200` → non affiché
 
 ### StandingsScene
 - Header fixe 16px avec logo compétition 32×12 + "CLASSEMENT"
@@ -342,11 +346,23 @@ Page HTML servie depuis LittleFS (`data/index.html`).
 
 ## WiFi
 
-**Configuration** : entièrement via la Web UI (mode point d'accès `RugbyDisplay-Setup`). Aucun fichier `credentials.h` n'est nécessaire.
+**Configuration** : entièrement via la Web UI (mode point d'accès `RugbyDisplay-Setup`, mdp : `rugby2024`). Credentials stockés en **NVS** (`Preferences` namespace `"wifi"`). Jusqu'à 8 SSIDs enregistrés.
 
-Au premier boot, si aucun réseau n'est enregistré, la carte démarre un AP avec portail captif. Les credentials saisis sont stockés en **NVS** (`Preferences`) — persistant aux redémarrages et aux mises à jour OTA. Modifiables via la Web UI à tout moment.
+**Cycle de connexion au boot :**
+1. Fast path : tente `nets[0]` directement (15s timeout)
+2. Scan + tri RSSI : essaie tous les SSIDs connus dans l'ordre de signal
 
-Resilience WiFi : check périodique toutes les 5s dans `DataFetcher::loop()`. Reconnect léger (`WiFi.reconnect()`) toutes les 5s, scan complet + tri RSSI toutes les 30s. Au reconnect, `fetchRotating()` est déclenché immédiatement (v1.3.4).
+**Cycle AP (quand aucun réseau connu n'est accessible) :**
+- Sans réseau enregistré → AP immédiat
+- Avec réseaux enregistrés : 2 min tentatives STA → AP 5 min → retour STA → loop
+
+**mDNS en mode AP :** `MDNS.begin("rugby-display")` démarré à l'ouverture de l'AP. `rugby-display.local` fonctionne en mode AP et en mode STA. En mode AP, l'IP de secours est `192.168.4.1`.
+
+**Reconnect DataFetcher :** `connectWiFi()` (scan complet) toutes les 20s quand déconnecté. Pas de `WiFi.reconnect()` (ne réessaie que le dernier SSID).
+
+**⚠️ Piège :** `WiFi.SSID(i)` retourne un `String` temporaire. `.c_str()` sur ce temporaire est un pointeur dangling après la ligne. Toujours : `String s = WiFi.SSID(i); const char* p = s.c_str();`
+
+**Web UI WiFi (mode AP) :** affiche les réseaux enregistrés existants + flow scan-pour-ajouter. Le POST `/wifi` reçoit la liste complète ; n'efface pas les autres réseaux.
 
 ---
 
