@@ -18,7 +18,8 @@
 - **🌐 3 compétitions** — Top 14, Pro D2, Champions Cup
 - **📡 Mise à jour OTA** — téléchargement automatique depuis GitHub Releases
 - **🖥️ Web UI** — configuration WiFi, luminosité, scènes, mise à jour manuelle
-- **📶 Mode AP** — point d'accès `RugbyDisplay-Setup` avec portail captif si pas de WiFi
+- **📶 Multi-WiFi** — jusqu'à 8 réseaux enregistrés, connexion au meilleur signal disponible
+- **📶 Mode AP** — point d'accès `RugbyDisplay-Setup` avec `rugby-display.local` si pas de WiFi
 
 ---
 
@@ -113,15 +114,20 @@ Si aucun réseau WiFi n'est enregistré, la carte bascule automatiquement en **m
 
 > 🔒 **Sécurité** : Les credentials WiFi sont stockés dans la mémoire flash interne de l'ESP32 (chiffrés par le SDK). Ils survivent aux redémarrages et aux mises à jour OTA.
 
-#### Récupération en cas de perte de WiFi
+#### Multi-réseau et récupération en cas de perte de WiFi
 
-Si la carte perd le réseau WiFi configuré, elle tente de se reconnecter automatiquement. Si après **5 minutes** le réseau n'est toujours pas retrouvé :
+Jusqu'à **8 réseaux WiFi** peuvent être enregistrés. La carte scanne et se connecte au plus fort disponible (tri par RSSI). Utile pour enregistrer domicile + hotspot téléphone.
 
-1. La carte bascule en **mode point d'accès** (`RugbyDisplay-Setup`) pendant **2 minutes**
-2. Vous pouvez vous y connecter pour vérifier la configuration ou ajouter un nouveau réseau
-3. Au bout de 2 minutes, l'AP s'éteint et la carte retourne en mode STA pour réessayer
+Si la carte perd tous ses réseaux connus, elle tente de se reconnecter (scan complet toutes les 20s). Si après **2 minutes** aucun réseau n'est trouvé :
 
-> 💡 **Cas particulier** : Si **aucun réseau WiFi n'est enregistré**, le mode AP démarre **immédiatement** au boot pour permettre la configuration initiale.
+1. La carte bascule en **mode point d'accès** (`RugbyDisplay-Setup`, mdp : `rugby2024`) pendant **5 minutes**
+2. `rugby-display.local` fonctionne en mode AP — connectez-vous à `RugbyDisplay-Setup` puis ouvrez l'adresse
+3. L'interface affiche les réseaux déjà enregistrés et permet d'en **ajouter** de nouveaux sans effacer les autres
+4. Au bout de 5 minutes, l'AP s'éteint et la carte retourne en mode STA pour réessayer (cycle indéfini)
+
+> 💡 **Indicateur AP** : en mode point d'accès, le texte **"AP"** en orange s'affiche à côté de l'icône WiFi déconnectée sur l'écran.
+
+> 💡 **Aucun réseau enregistré** : le mode AP démarre **immédiatement** au boot.
 
 ### 3. Web UI
 Une fois connectée au WiFi, accédez à la configuration :
@@ -241,7 +247,7 @@ Dès qu'un match live est détecté dans la base, le renderer passe en **priorit
 
 | Événement | Fréquence |
 |---|---|
-| Vérification état WiFi/NTP (task loop) | **5 s** |
+| Reconnect WiFi (scan complet tous SSIDs) | **20 s** |
 | Resync NTP | **1 h** (`NTP_INTERVAL_MS`) |
 | Rebuild des scènes si vide | **5 s** |
 
