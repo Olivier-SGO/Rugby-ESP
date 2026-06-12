@@ -53,13 +53,13 @@ void FixturesScene::render() {
     Display.drawBitmap565(logoX, 0, lw, LOGO_COMP_H, gCompLogoLg[_compIdx]);
     drawWiFiStatusIfNeeded(logoX, 0);
 
-    // Round / group indicator, bottom-left corner
+    // Round / group indicator, bottom-left corner (built-in 5×7 font, y=top)
     if (_md.group[0]) {
-        Display.drawText(2, 63, _md.group, C_GREY, f8);
+        Display.drawText(2, 56, _md.group, C_GREY, nullptr);
     } else if (_md.round > 0) {
         char rnd[8];
         snprintf(rnd, sizeof(rnd), "J%d", _md.round);
-        Display.drawText(2, 63, rnd, C_GREY, f8);
+        Display.drawText(2, 56, rnd, C_GREY, nullptr);
     }
 
     // Team abbreviations with shadow, pushed to edges
@@ -88,11 +88,11 @@ void FixturesScene::render() {
         Display.drawText(CENTER_MID - tw / 2, 48, "Horaire TBD", C_GREY, f8);
     }
 
-    // Counter bottom-right
+    // Counter bottom-right (built-in 5×7 font, y=top)
     char counter[8];
     snprintf(counter, sizeof(counter), "%d/%d", _index + 1, _total);
-    Display.getTextBounds(counter, 0, 0, &x1, &y1, &tw, &th, f8);
-    Display.drawText(DISPLAY_W - tw - 2, 63, counter, C_GREY, f8);
+    Display.getTextBounds(counter, 0, 56, &x1, &y1, &tw, &th, nullptr);
+    Display.drawText(DISPLAY_W - tw - 2, 56, counter, C_GREY, nullptr);
 
     Display.flip();
 }

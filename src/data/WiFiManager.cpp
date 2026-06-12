@@ -119,7 +119,8 @@ bool WiFiManager::connect() {
     }
 
     for (int i = 0; i < scanned; i++) {
-        const char* scannedSsid = WiFi.SSID(order[i].idx).c_str();
+        String scannedSsidStr = WiFi.SSID(order[i].idx); // store before .c_str() — temporary would dangle
+        const char* scannedSsid = scannedSsidStr.c_str();
         int rssi = order[i].rssi;
         for (int j = 0; j < count; j++) {
             if (strcmp(scannedSsid, nets[j].ssid) == 0) {

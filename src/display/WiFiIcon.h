@@ -2,8 +2,16 @@
 #include <Arduino.h>
 #include "DisplayManager.h"
 #include <WiFi.h>
+#include "config.h"
 
 extern volatile bool gBootFetchInProgress;
+
+// Draw "AP" label above the icon using the built-in 5x7 GFX font (no extra include needed)
+inline void _drawAPLabel(int16_t x, int16_t y) {
+    if (WiFi.getMode() & WIFI_AP) {
+        Display.drawText(x + 1, y - 2, "AP", C_ORANGE, nullptr);
+    }
+}
 
 /**
  * 16×16 RGB565 bitmap for the WiFi-disconnected icon.
@@ -35,6 +43,7 @@ static const uint16_t WIFI_DISCONNECTED_ICON[16 * 16] = {
 inline void drawWiFiDisconnectedIconAt(int16_t x, int16_t y) {
     if (!gBootFetchInProgress && WiFi.status() != WL_CONNECTED) {
         Display.drawBitmap565(x, y, 16, 16, WIFI_DISCONNECTED_ICON, false);
+        _drawAPLabel(x, y);
     }
 }
 
@@ -47,7 +56,9 @@ inline void drawWiFiDisconnectedIconAt(int16_t x, int16_t y) {
 inline void drawWiFiStatusIfNeeded(int16_t logoLeftX, int16_t logoY) {
     if (!gBootFetchInProgress && WiFi.status() != WL_CONNECTED) {
         // Place 18 px to the left of the logo, vertically centred within the logo height
+        int16_t iconX = logoLeftX - 18;
         int16_t iconY = logoY + (LOGO_COMP_H - 16) / 2 + 2;
-        Display.drawBitmap565(logoLeftX - 18, iconY, 16, 16, WIFI_DISCONNECTED_ICON, false);
+        Display.drawBitmap565(iconX, iconY, 16, 16, WIFI_DISCONNECTED_ICON, false);
+        _drawAPLabel(iconX, iconY);
     }
 }

@@ -309,6 +309,8 @@ void loop() {
                     // No saved networks: AP immediately so user can configure
                     WiFiManager::startAP();
                     dnsServer.start(53, "*", WiFi.softAPIP());
+                    MDNS.begin("rugby-display");
+                    MDNS.addService("http", "tcp", 80);
                     Serial.println("AP started (no saved networks)");
                     apStarted = true;
                     apStartedAt = millis();
@@ -317,6 +319,8 @@ void loop() {
                     // 2 min of failed STA attempts: open AP for 5 min so user can connect/configure
                     WiFiManager::startAP();
                     dnsServer.start(53, "*", WiFi.softAPIP());
+                    MDNS.begin("rugby-display");
+                    MDNS.addService("http", "tcp", 80);
                     Serial.println("AP started (2 min STA timeout)");
                     apStarted = true;
                     apStartedAt = millis();
@@ -329,8 +333,10 @@ void loop() {
 
                 // After 5 min of AP: stop and retry STA connection
                 if (WiFiManager::count > 0 && millis() - apStartedAt > 300000) {
+                    MDNS.end();
                     WiFiManager::stopAP();
                     apStarted = false;
+                    mdnsStarted = false; // allow mDNS restart when STA reconnects
                     wifiDisconnectedSince = millis(); // reset 2 min STA timer
                     Scenes.markDirty();
                     Serial.println("AP stopped (5 min elapsed), retrying STA");

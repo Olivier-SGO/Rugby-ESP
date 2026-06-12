@@ -46,14 +46,13 @@ void ScoreboardScene::drawLogos() {
     if (_homeLogo) Display.drawBitmap565(0, 0, LOGO_LG_W, LOGO_LG_H, _homeLogo);
     if (_awayLogo) Display.drawBitmap565(DISPLAY_W - LOGO_LG_W, 0, LOGO_LG_W, LOGO_LG_H, _awayLogo);
 
-    // Round / group indicator, bottom-left corner
-    const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
+    // Round / group indicator, bottom-left corner (built-in 5×7 font, y=top)
     if (_md.group[0]) {
-        Display.drawText(2, 63, _md.group, C_GREY, af);
+        Display.drawText(2, 56, _md.group, C_GREY, nullptr);
     } else if (_md.round > 0) {
         char rnd[8];
         snprintf(rnd, sizeof(rnd), "J%d", _md.round);
-        Display.drawText(2, 63, rnd, C_GREY, af);
+        Display.drawText(2, 56, rnd, C_GREY, nullptr);
     }
 }
 
@@ -121,14 +120,13 @@ void ScoreboardScene::drawScores() {
 }
 
 void ScoreboardScene::drawFooter() {
-    const GFXfont* af = (const GFXfont*)&AtkinsonHyperlegible8pt7b;
     int16_t x1, y1; uint16_t tw, th;
 
-    // Counter: bottom-right corner, overlaid on away logo
+    // Counter: bottom-right corner (built-in 5×7 font, y=top)
     char counter[8];
     snprintf(counter, sizeof(counter), "%d/%d", _index + 1, _total);
-    Display.getTextBounds(counter, 0, 0, &x1, &y1, &tw, &th, af);
-    Display.drawText(DISPLAY_W - tw - 2, 63, counter, C_GREY, af);
+    Display.getTextBounds(counter, 0, 56, &x1, &y1, &tw, &th, nullptr);
+    Display.drawText(DISPLAY_W - tw - 2, 56, counter, C_GREY, nullptr);
 }
 
 uint16_t ScoreboardScene::scoreColor(int16_t h, int16_t a, bool isHome, MatchStatus st) {

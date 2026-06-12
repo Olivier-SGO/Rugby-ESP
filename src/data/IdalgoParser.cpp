@@ -393,32 +393,31 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
         }
     }
 
-    if (match.status == MatchStatus::Scheduled) {
-        if (readAttrVal(start, "data-value-default", raw, sizeof(raw))) {
-            // Parse "Sat Apr 25 2026 14:30:00 +0200"
-            char mon[4];
-            int day, year, hh, mm, ss, tzh;
-            if (sscanf(raw, "%*s %3s %d %d %d:%d:%d %d", mon, &day, &year, &hh, &mm, &ss, &tzh) == 7) {
-                static const char* MONTHS[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-                int month = 0;
-                for (int i = 0; i < 12; i++) {
-                    if (strcasecmp(mon, MONTHS[i]) == 0) { month = i + 1; break; }
-                }
-                struct tm tm = {};
-                tm.tm_year = year - 1900;
-                tm.tm_mon  = month - 1;
-                tm.tm_mday = day;
-                tm.tm_hour = hh;
-                tm.tm_min  = mm;
-                tm.tm_sec  = ss;
-                match.kickoff_utc = mktime(&tm);
+    // Parse kickoff for all statuses (live/finished need it for stale-live guard)
+    if (readAttrVal(start, "data-value-default", raw, sizeof(raw))) {
+        // Parse "Sat Apr 25 2026 14:30:00 +0200"
+        char mon[4];
+        int day, year, hh, mm, ss, tzh;
+        if (sscanf(raw, "%*s %3s %d %d %d:%d:%d %d", mon, &day, &year, &hh, &mm, &ss, &tzh) == 7) {
+            static const char* MONTHS[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+            int month = 0;
+            for (int i = 0; i < 12; i++) {
+                if (strcasecmp(mon, MONTHS[i]) == 0) { month = i + 1; break; }
             }
-        } else if (readClassText(start, "idalgo_date_timezone", raw, sizeof(raw))) {
-            // Fallback to HH:MM only (legacy pages without data-value-default)
-            int h = 0, m2 = 0;
-            if (sscanf(raw, "%d:%d", &h, &m2) == 2) {
-                match.kickoff_utc = (time_t)(h * 3600 + m2 * 60);
-            }
+            struct tm tm = {};
+            tm.tm_year = year - 1900;
+            tm.tm_mon  = month - 1;
+            tm.tm_mday = day;
+            tm.tm_hour = hh;
+            tm.tm_min  = mm;
+            tm.tm_sec  = ss;
+            match.kickoff_utc = mktime(&tm);
+        }
+    } else if (readClassText(start, "idalgo_date_timezone", raw, sizeof(raw))) {
+        // Fallback to HH:MM only (legacy pages without data-value-default)
+        int h = 0, m2 = 0;
+        if (sscanf(raw, "%d:%d", &h, &m2) == 2) {
+            match.kickoff_utc = (time_t)(h * 3600 + m2 * 60);
         }
     }
 
@@ -686,6 +685,14 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
     if (scoreRight && scoreRight < end) {
         const char* gt = strchr(scoreRight, '>');
         if (gt) match.away_score = atoi(gt + 1);
+    }
+
+    // Live minute / half-time (same CSS class as Top14/ProD2)
+    if (match.status == MatchStatus::Live) {
+        if (readClassText(start, "span_idalgo_score_square_score_status", raw, sizeof(raw))) {
+            if (strcmp(raw, "MT") == 0) match.minute = -1;
+            else match.minute = atoi(raw);
+        }
     }
 
     // Absolute date

@@ -288,6 +288,7 @@ void SceneManager::rebuildSlots() {
         }
 
         if (p.fixtures) {
+            time_t now = time(nullptr);
             // Sort CC fixtures chronologically by knockout phase
             if (ci == 2 && d->fixture_count > 1) {
                 MatchData* sorted = sortedBuf;
@@ -303,16 +304,22 @@ void SceneManager::rebuildSlots() {
                         }
                     }
                 }
-                for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
+                for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++) {
+                    // Skip fixtures whose kickoff is more than 2h in the past
+                    if (sorted[i].kickoff_utc > 0 && now > 0 && sorted[i].kickoff_utc < now - 7200) continue;
                     _fixScenes[fixIdx].setMatch(sorted[i], comps[ci].name, comps[ci].color,
                                                 i, d->fixture_count);
                     addSlot(&_fixScenes[fixIdx], fixtureMs);
+                    fixIdx++;
                 }
             } else {
-                for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++, fixIdx++) {
+                for (int i = 0; i < d->fixture_count && fixIdx < MAX_FIX_SCENES; i++) {
+                    // Skip fixtures whose kickoff is more than 2h in the past
+                    if (d->fixtures[i].kickoff_utc > 0 && now > 0 && d->fixtures[i].kickoff_utc < now - 7200) continue;
                     _fixScenes[fixIdx].setMatch(d->fixtures[i], comps[ci].name, comps[ci].color,
                                                 i, d->fixture_count);
                     addSlot(&_fixScenes[fixIdx], fixtureMs);
+                    fixIdx++;
                 }
             }
         }

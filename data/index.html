@@ -35,10 +35,25 @@ button{width:100%;padding:10px;border-radius:6px;border:none;cursor:pointer;font
 <!-- AP configuration mode -->
 <div id="ap-config" style="display:none;background:#1a1a1a;border-radius:8px;padding:16px;margin:12px 0">
   <h2 style="margin-top:0;color:#f84">Configuration WiFi</h2>
-  <p style="font-size:13px;color:#bbb">Le display n'est pas connecte a Internet.<br>Connectez-vous au reseau <b>RugbyDisplay-Setup</b> (mot de passe: <b>rugby2024</b>) puis cliquez ci-dessous.</p>
-  <button class="btn-primary" onclick="scanNetworks()">Scanner les reseaux</button>
-  <div id="scan-results" style="margin-top:12px"></div>
-  <button class="btn-primary" onclick="connectWifi()" id="btn-connect" style="display:none;margin-top:12px">Connecter et redemarrer</button>
+  <p style="font-size:13px;color:#bbb">Le display n'est pas connecte a Internet.<br>Connectez-vous au reseau <b>RugbyDisplay-Setup</b> (mot de passe: <b>rugby2024</b>) puis configurez les reseaux ci-dessous.</p>
+
+  <h3 style="color:#aaa;font-size:14px;margin:12px 0 6px">Reseaux enregistres</h3>
+  <div id="ap-saved-list"></div>
+
+  <h3 style="color:#aaa;font-size:14px;margin:12px 0 6px">Ajouter un reseau</h3>
+  <button class="btn-primary" onclick="apScanNetworks()" style="width:auto;padding:6px 14px">Scanner les reseaux</button>
+  <div id="ap-scan-results" style="margin-top:10px"></div>
+  <div id="ap-add-form" style="display:none;margin-top:8px">
+    <input type="text" id="ap-new-ssid" placeholder="SSID"
+      style="width:100%;background:#222;border:1px solid #444;color:#eee;border-radius:4px;padding:8px;font-size:14px;margin-bottom:6px">
+    <input type="password" id="ap-new-pass" placeholder="Mot de passe"
+      style="width:100%;background:#222;border:1px solid #444;color:#eee;border-radius:4px;padding:8px;font-size:14px;margin-bottom:8px">
+    <button class="btn-primary" onclick="apAddNetwork()" style="width:auto;padding:6px 14px">Ajouter a la liste</button>
+  </div>
+
+  <button class="btn-primary" onclick="apSaveAndRestart()" id="btn-ap-save"
+    style="margin-top:16px;background:#4a4">Sauvegarder et redemarrer</button>
+  <div id="ap-status" style="margin-top:8px;font-size:13px;color:#4a4"></div>
 </div>
 
 <div id="main-ui">
@@ -176,6 +191,7 @@ async function loadStatus() {
     document.getElementById('ap-config').style.display = apMode ? 'block' : 'none';
     document.getElementById('main-ui').style.display    = apMode ? 'none'  : 'block';
     if (apMode) {
+      apLoadSaved();
       document.getElementById('status').textContent =
         `Mode configuration AP  IP: ${d.ap_ip || '192.168.4.1'}`;
     } else {
@@ -187,67 +203,100 @@ async function loadStatus() {
   }
 }
 
-let scannedNetworks = [];
+// ---- AP mode WiFi config ----
+let apNetworks = []; // working copy of saved networks (may include new additions)
 
-async function scanNetworks() {
-  const btn = document.querySelector('#ap-config button');
+async function apLoadSaved() {
+  try {
+    const r = await fetch('/wifi');
+    apNetworks = await r.json();
+  } catch(e) { apNetworks = []; }
+  apRenderSaved();
+}
+
+function apRenderSaved() {
+  const c = document.getElementById('ap-saved-list');
+  if (apNetworks.length === 0) {
+    c.innerHTML = '<p style="color:#888;font-size:13px">Aucun reseau enregistre.</p>';
+    return;
+  }
+  c.innerHTML = apNetworks.map((n, i) => `
+    <div style="background:#222;padding:8px;border-radius:6px;margin:4px 0;display:flex;align-items:center;gap:8px">
+      <span style="flex:1;font-size:14px;color:#eee">${escapeHtml(n.ssid)}</span>
+      <button onclick="apRemoveNetwork(${i})" style="padding:2px 10px;background:#c33;color:#fff;border:none;border-radius:4px;cursor:pointer">X</button>
+    </div>`).join('');
+}
+
+function apRemoveNetwork(i) {
+  apNetworks.splice(i, 1);
+  apRenderSaved();
+}
+
+async function apScanNetworks() {
+  const btn = document.querySelector('#ap-config .btn-primary');
   btn.textContent = 'Scan en cours...';
   btn.disabled = true;
+  document.getElementById('ap-scan-results').innerHTML = '';
+  document.getElementById('ap-add-form').style.display = 'none';
   try {
     const r = await fetch('/scan');
-    scannedNetworks = await r.json();
-    const container = document.getElementById('scan-results');
-    container.innerHTML = '';
-    if (scannedNetworks.length === 0) {
-      container.innerHTML = '<p style="color:#888;font-size:13px">Aucun reseau trouve.</p>';
+    const nets = await r.json();
+    const c = document.getElementById('ap-scan-results');
+    if (nets.length === 0) {
+      c.innerHTML = '<p style="color:#888;font-size:13px">Aucun reseau trouve.</p>';
     } else {
-      scannedNetworks.forEach((net, i) => {
-        const div = document.createElement('div');
-        div.style = 'background:#222;padding:8px;border-radius:6px;margin:6px 0;display:flex;align-items:center;gap:8px';
-        div.innerHTML = `
-          <input type="radio" name="ap-ssid" value="${escapeHtml(net.ssid)}" id="ap-net-${i}">
-          <label for="ap-net-${i}" style="flex:1;font-size:14px;color:#eee;cursor:pointer">
-            ${escapeHtml(net.ssid)} <span style="color:#888;font-size:12px">${net.rssi} dBm ${net.open ? '(ouvert)' : ''}</span>
-          </label>
-        `;
-        container.appendChild(div);
-      });
-      // Add password field
-      const passDiv = document.createElement('div');
-      passDiv.style = 'margin-top:8px';
-      passDiv.innerHTML = `
-        <input type="password" id="ap-password" placeholder="Mot de passe WiFi"
-          style="width:100%;background:#222;border:1px solid #444;color:#eee;border-radius:4px;padding:8px;font-size:14px">
-      `;
-      container.appendChild(passDiv);
-      document.getElementById('btn-connect').style.display = 'block';
+      c.innerHTML = nets.map((n, i) => `
+        <div style="background:#222;padding:8px;border-radius:6px;margin:4px 0;display:flex;align-items:center;gap:8px;cursor:pointer"
+             onclick="apSelectScanned('${escapeHtml(n.ssid)}')">
+          <span style="flex:1;font-size:14px;color:#eee">${escapeHtml(n.ssid)}</span>
+          <span style="color:#888;font-size:12px">${n.rssi} dBm${n.open ? ' (ouvert)' : ''}</span>
+        </div>`).join('');
     }
   } catch(e) {
-    document.getElementById('scan-results').innerHTML = '<p style="color:#c33;font-size:13px">Erreur de scan</p>';
+    document.getElementById('ap-scan-results').innerHTML = '<p style="color:#c33;font-size:13px">Erreur de scan</p>';
   }
   btn.textContent = 'Scanner les reseaux';
   btn.disabled = false;
 }
 
-async function connectWifi() {
-  const selected = document.querySelector('input[name="ap-ssid"]:checked');
-  if (!selected) { alert('Selectionnez un reseau WiFi'); return; }
-  const ssid = selected.value;
-  const pass = document.getElementById('ap-password').value;
-  const btn = document.getElementById('btn-connect');
-  btn.textContent = 'Connexion...';
+function apSelectScanned(ssid) {
+  document.getElementById('ap-new-ssid').value = ssid;
+  document.getElementById('ap-new-pass').value = '';
+  document.getElementById('ap-add-form').style.display = 'block';
+  document.getElementById('ap-new-pass').focus();
+}
+
+function apAddNetwork() {
+  const ssid = document.getElementById('ap-new-ssid').value.trim();
+  const pass = document.getElementById('ap-new-pass').value;
+  if (!ssid) { alert('SSID requis'); return; }
+  // Don't add duplicate
+  if (apNetworks.some(n => n.ssid === ssid)) {
+    alert('Ce reseau est deja dans la liste.');
+    return;
+  }
+  apNetworks.push({ssid, password: pass});
+  apRenderSaved();
+  document.getElementById('ap-add-form').style.display = 'none';
+  document.getElementById('ap-scan-results').innerHTML = '';
+}
+
+async function apSaveAndRestart() {
+  if (apNetworks.length === 0) { alert('Ajoutez au moins un reseau.'); return; }
+  const btn = document.getElementById('btn-ap-save');
+  btn.textContent = 'Sauvegarde...';
   btn.disabled = true;
   try {
     await fetch('/wifi', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify([{ssid, password: pass}])
+      body: JSON.stringify(apNetworks)
     });
     await fetch('/restart', {method:'POST'});
-    document.getElementById('scan-results').innerHTML = '<p style="color:#4a4">Redemarrage en cours...</p>';
+    document.getElementById('ap-status').textContent = 'Redemarrage en cours...';
   } catch(e) {
-    alert('Erreur: ' + e);
-    btn.textContent = 'Connecter et redemarrer';
+    document.getElementById('ap-status').textContent = 'Erreur: ' + e;
+    btn.textContent = 'Sauvegarder et redemarrer';
     btn.disabled = false;
   }
 }

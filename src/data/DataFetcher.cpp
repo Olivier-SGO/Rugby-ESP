@@ -124,14 +124,8 @@ void DataFetcher::loop() {
             _wifiOk = false;
             Serial.println("[WIFI] disconnected");
         }
-        // Light reconnect every 5s (no scan — lets ESP auto-reconnect kick in)
-        if (now - _lastWiFiReconnectAttempt > 5000) {
-            _lastWiFiReconnectAttempt = now;
-            WiFi.reconnect();
-            Serial.println("[WIFI] reconnect() called");
-        }
-        // Full scan+connect cycle every 30s as fallback
-        if (now - _lastWiFiFullReconnect > 30000) {
+        // Full scan+connect cycle every 20s — tries all saved SSIDs by RSSI
+        if (now - _lastWiFiFullReconnect > 20000) {
             _lastWiFiFullReconnect = now;
             Serial.println("[WIFI] attempting full scan reconnect...");
             connectWiFi();
