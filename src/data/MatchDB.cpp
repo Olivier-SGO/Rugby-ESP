@@ -248,6 +248,28 @@ void MatchDB::load() {
         deserializeCompetition(doc["cc"],  _cc);
     }
     f.close();
+
+    // On load, if any final-phase data (group set) is present for T14 or ProD2,
+    // drop old regular-season Finished results so the last regular matchday is not shown
+    // once playoffs have started.
+    auto cleanup = [](CompetitionData& d) {
+        bool hasFinalPhase = false;
+        for (int i = 0; i < d.result_count; i++) {
+            if (d.results[i].group[0]) { hasFinalPhase = true; break; }
+        }
+        if (!hasFinalPhase) return;
+        int kept = 0;
+        for (int i = 0; i < d.result_count; i++) {
+            const MatchData& m = d.results[i];
+            if (m.group[0] || m.status != MatchStatus::Finished) {
+                if (kept != i) d.results[kept] = m;
+                kept++;
+            }
+        }
+        d.result_count = kept;
+    };
+    cleanup(_top14);
+    cleanup(_prod2);
 }
 
 // ── Compact binary persistence for Champions Cup ─────────────────────────────

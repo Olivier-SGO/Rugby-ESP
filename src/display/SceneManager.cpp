@@ -10,11 +10,16 @@
 
 SceneManager Scenes;
 
-// Chronological order for CC knockout phases (pools < 1/8 < 1/4 < 1/2 < Finale)
-static int ccPhaseOrder(const char* group) {
+// Chronological order for knockout phases (CC pools + domestic barrages/quarters + CC + T14/PD2 finals).
+// Empty group (regular season) = 0 so they sort before knockouts or keep relative order via secondary.
+static int phaseOrder(const char* group) {
+    if (!group || !group[0]) return 0;
     if (strncmp(group, "Gr.", 3) == 0) return 0;
     if (strcmp(group, "1/8F") == 0) return 1;
-    if (strcmp(group, "1/4F") == 0) return 2;
+    // barrages treated as 1/4 equivalent for this season (press often calls the barrage "quart")
+    if (strcmp(group, "1/4F") == 0 ||
+        strcmp(group, "Barr.") == 0 ||
+        strncmp(group, "Barr", 4) == 0) return 2;
     if (strcmp(group, "1/2F") == 0) return 3;
     if (strcmp(group, "Finale") == 0) return 4;
     return 0;
@@ -262,16 +267,26 @@ void SceneManager::rebuildSlots() {
                     nonlive[nNonlive++] = d->results[i];
             }
 
-            // Sort non-live: CC by phase order, others keep DB order
-            if (ci == 2 && nNonlive > 1) {
-                for (int i = 0; i < nNonlive - 1; i++) {
-                    for (int j = 0; j < nNonlive - i - 1; j++) {
-                        int o1 = ccPhaseOrder(nonlive[j].group);
-                        int o2 = ccPhaseOrder(nonlive[j+1].group);
-                        if (o1 > o2 || (o1 == o2 && nonlive[j].round > nonlive[j+1].round)) {
-                            MatchData tmp = nonlive[j];
-                            nonlive[j] = nonlive[j+1];
-                            nonlive[j+1] = tmp;
+            // Sort non-live by phase order (CC + T14/PD2 final phases that now carry group).
+            // Regular season (no group) stays in parse/DB order (o==0 for all).
+            if (nNonlive > 1) {
+                // Only run phase sort if it's CC or at least one match has a group label (final phase data)
+                bool needsPhaseSort = (ci == 2);
+                if (!needsPhaseSort) {
+                    for (int k = 0; k < nNonlive; k++) {
+                        if (nonlive[k].group[0]) { needsPhaseSort = true; break; }
+                    }
+                }
+                if (needsPhaseSort) {
+                    for (int i = 0; i < nNonlive - 1; i++) {
+                        for (int j = 0; j < nNonlive - i - 1; j++) {
+                            int o1 = phaseOrder(nonlive[j].group);
+                            int o2 = phaseOrder(nonlive[j+1].group);
+                            if (o1 > o2 || (o1 == o2 && nonlive[j].round > nonlive[j+1].round)) {
+                                MatchData tmp = nonlive[j];
+                                nonlive[j] = nonlive[j+1];
+                                nonlive[j+1] = tmp;
+                            }
                         }
                     }
                 }
@@ -289,14 +304,20 @@ void SceneManager::rebuildSlots() {
 
         if (p.fixtures) {
             time_t now = time(nullptr);
-            // Sort CC fixtures chronologically by knockout phase
-            if (ci == 2 && d->fixture_count > 1) {
+            // Sort fixtures by phase for CC and for T14/PD2 when they carry final-phase groups (barrages etc.)
+            bool usePhase = (ci == 2);
+            if (!usePhase && d->fixture_count > 0) {
+                for (int k = 0; k < d->fixture_count; k++) {
+                    if (d->fixtures[k].group[0]) { usePhase = true; break; }
+                }
+            }
+            if (usePhase && d->fixture_count > 1) {
                 MatchData* sorted = sortedBuf;
                 memcpy(sorted, d->fixtures, sizeof(MatchData) * d->fixture_count);
                 for (int i = 0; i < d->fixture_count - 1; i++) {
                     for (int j = 0; j < d->fixture_count - i - 1; j++) {
-                        int o1 = ccPhaseOrder(sorted[j].group);
-                        int o2 = ccPhaseOrder(sorted[j+1].group);
+                        int o1 = phaseOrder(sorted[j].group);
+                        int o2 = phaseOrder(sorted[j+1].group);
                         if (o1 > o2 || (o1 == o2 && sorted[j].round > sorted[j+1].round)) {
                             MatchData tmp = sorted[j];
                             sorted[j] = sorted[j+1];

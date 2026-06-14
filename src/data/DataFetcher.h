@@ -40,6 +40,11 @@ private:
     // If d.current_round > 0, fetch journee-(round+1)/calendrier to get full next round fixtures
     void fetchNextJournee(CompetitionData& d, const char* compPath,
                           IdalgoParser& idalgo);
+
+    // Fetch known final phase pages (barrages, demi-finales, ...) for Top14/ProD2 and merge
+    // with appropriate group label so scenes can display "1/4F" etc. like CC.
+    void enrichWithFinalPhases(CompetitionData& d, const char* compPath,
+                               IdalgoParser& idalgo);
 };
 
 extern DataFetcher Fetcher;

@@ -2,6 +2,7 @@
 #include "IdalgoParser.h"
 #include "WiFiManager.h"
 #include "OTAUpdater.h"
+#include "SceneManager.h"
 #include <WiFi.h>
 #include "config.h"
 #include "DisplayPrefs.h"
@@ -198,6 +199,7 @@ void DataFetcher::fetchRotating() {
                 memset(d, 0, sizeof(CompetitionData));
                 if (idalgo.fetch(top14Base, *d)) {
                     fetchNextJournee(*d, top14Base, idalgo);
+                    enrichWithFinalPhases(*d, top14Base, idalgo);
                     _db->updateTop14(*d);
                     fetched = true;
                 }
@@ -210,6 +212,7 @@ void DataFetcher::fetchRotating() {
                 memset(d, 0, sizeof(CompetitionData));
                 if (idalgo.fetch(prod2Base, *d)) {
                     fetchNextJournee(*d, prod2Base, idalgo);
+                    enrichWithFinalPhases(*d, prod2Base, idalgo);
                     _db->updateProd2(*d);
                     fetched = true;
                 }
@@ -233,6 +236,7 @@ void DataFetcher::fetchRotating() {
         _firstFetchDone = true;
         Serial.printf("[FETCH] Rotating persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
         _db->persist();
+        Scenes.markDirty();  // force scenes to rebuild with fresh (pruned) data
     }
 
     reclaimTLSReserve();
@@ -298,6 +302,7 @@ void DataFetcher::fetchAll(bool forceAll) {
         Serial.println("[FETCH] before Top14 fetch");
         if (idalgo.fetch(top14Base, *top14)) {
             Serial.println("[FETCH] Top14 fetch OK, before updateTop14");
+            enrichWithFinalPhases(*top14, top14Base, idalgo);
             _db->updateTop14(*top14);
             Serial.println("[FETCH] after updateTop14");
         } else {
@@ -314,6 +319,7 @@ void DataFetcher::fetchAll(bool forceAll) {
         Serial.println("[FETCH] before ProD2 fetch");
         if (idalgo.fetch(prod2Base, *prod2)) {
             Serial.println("[FETCH] ProD2 fetch OK, before updateProd2");
+            enrichWithFinalPhases(*prod2, prod2Base, idalgo);
             _db->updateProd2(*prod2);
             Serial.println("[FETCH] after updateProd2");
         } else {
@@ -333,6 +339,7 @@ fetchCleanup:
     _firstFetchDone = true;
     Serial.printf("[FETCH] before persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
     _db->persist();
+    Scenes.markDirty();  // force scenes to rebuild with fresh (pruned) data
     Serial.printf("[FETCH] done persist: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
 
     reclaimTLSReserve();
@@ -389,4 +396,84 @@ void DataFetcher::fetchNextJournee(CompetitionData& d, const char* compPath,
             d.results[d.result_count++] = next->results[i];
     }
     heap_caps_free(next);
+}
+
+void DataFetcher::enrichWithFinalPhases(CompetitionData& d, const char* compPath,
+                                        IdalgoParser& idalgo) {
+    // Known final phase slugs on ladepeche (from nav on /resultats and phase pages 2026 season).
+    // "barrages" currently carries the high-stakes opening playoff matches (press: "quart de finale" level).
+    // Labels short for the 5x7 bottom-left indicator, consistent with CC.
+    static const struct { const char* slug; const char* label; } PHASES[] = {
+        {"barrages",     "1/4F"},
+        {"demi-finales", "1/2F"},
+        {"finale",       "Finale"},
+        {nullptr, nullptr}
+    };
+
+    const char* comp = strstr(compPath, "top-14") ? "top-14" : "pro-d2";
+
+    bool gotPhaseData = false;
+
+    for (int p = 0; PHASES[p].slug; ++p) {
+        char url[220];
+        snprintf(url, sizeof(url),
+                 "https://www.ladepeche.fr/sports/resultats-sportifs/rugby/%s/%s/resultats",
+                 comp, PHASES[p].slug);
+
+        CompetitionData* pd = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
+        if (!pd) continue;
+        memset(pd, 0, sizeof(CompetitionData));
+
+        if (idalgo.fetch(url, *pd)) {
+            if (pd->result_count > 0 || pd->fixture_count > 0) {
+                gotPhaseData = true;
+            }
+
+            // Tag every match from this phase page with the short group label (if not already set by parser)
+            for (int i = 0; i < pd->result_count; i++) {
+                if (!pd->results[i].group[0])
+                    strlcpy(pd->results[i].group, PHASES[p].label, sizeof(pd->results[i].group));
+            }
+            for (int i = 0; i < pd->fixture_count; i++) {
+                if (!pd->fixtures[i].group[0])
+                    strlcpy(pd->fixtures[i].group, PHASES[p].label, sizeof(pd->fixtures[i].group));
+            }
+
+            // Merge non-duplicates (reuse the same dedup as fetchNextJournee)
+            for (int i = 0; i < pd->result_count && d.result_count < CompetitionData::MAX_MATCHES; i++) {
+                if (!isDuplicateMatch(d, pd->results[i], false))
+                    d.results[d.result_count++] = pd->results[i];
+            }
+            for (int i = 0; i < pd->fixture_count && d.fixture_count < CompetitionData::MAX_MATCHES; i++) {
+                if (!isDuplicateMatch(d, pd->fixtures[i], true))
+                    d.fixtures[d.fixture_count++] = pd->fixtures[i];
+            }
+            Serial.printf("[FETCH] Phase %s: +%d res +%d fix (now T%d/F%d)\n",
+                          PHASES[p].slug, pd->result_count, pd->fixture_count,
+                          d.result_count, d.fixture_count);
+        }
+        heap_caps_free(pd);
+    }
+
+    // When final phases are active (any phase page returned data), drop *all* regular-season
+    // Finished results brought by the /phase-reguliere page (J26, J30, etc.).
+    // This prevents the last regular matchday from mixing with or reappearing alongside
+    // barrages / demi-finales / finale scores.
+    if (gotPhaseData) {
+        int kept = 0;
+        for (int i = 0; i < d.result_count; i++) {
+            const MatchData& m = d.results[i];
+            // Keep phase matches (have group) + any Live + any Scheduled.
+            // Drop Finished regular-season matches (no group).
+            if (m.group[0] || m.status == MatchStatus::Live || m.status == MatchStatus::Scheduled) {
+                if (kept != i) d.results[kept] = m;
+                kept++;
+            }
+        }
+        if (kept < d.result_count) {
+            Serial.printf("[FETCH] Pruned %d regular season results (final phases active, now %d results)\n",
+                          d.result_count - kept, kept);
+        }
+        d.result_count = kept;
+    }
 }

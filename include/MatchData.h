@@ -21,7 +21,7 @@ struct MatchData {
     int8_t   minute;          // -1 = HT, 0 = unknown, >0 = minute
     time_t   kickoff_utc;     // 0 = TBD
     uint8_t  round;           // journée number
-    char     group[16];       // pool / phase name (e.g. "P1", "1/4F") — CC only
+    char     group[16];       // pool / phase name (e.g. "P1", "1/4F", "1/2F", "Finale", "Barrages"). Now used for T14/ProD2 final phases too.
 };
 
 // Lightweight copy stored in ScoreboardScene/FixturesScene — no team names needed

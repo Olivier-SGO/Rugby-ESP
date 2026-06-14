@@ -170,6 +170,41 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     return true;
 }
 
+// Depth-aware end of current <li> (handles nested <li> in rich final-phase pages with scorers/stats).
+// Call with a pointer inside the block (e.g. the div_idalgo_dom_match); it walks back to the
+// enclosing <li> then counts siblings/children to the matching </li>.
+static const char* findLiEnd(const char* start, const char* pageEnd) {
+    // Walk backwards to find the opening <li that contains 'start'
+    const char* liOpen = start;
+    while (liOpen >= start - 4096 && liOpen > (start - 8192)) {  // safety bound
+        if (*liOpen == '<' && liOpen + 3 < pageEnd && strncmp(liOpen, "<li", 3) == 0) {
+            break;
+        }
+        liOpen--;
+        if (liOpen < (const char*)0x100) break; // underflow guard
+    }
+    if (liOpen < start - 4096 || liOpen <= (start-8192) || strncmp(liOpen, "<li", 3) != 0) {
+        // fallback: naive from start
+        const char* p = strstr(start, "</li>");
+        return p ? p + 5 : pageEnd;
+    }
+
+    int depth = 1;  // we are inside this <li>
+    const char* p = liOpen + 3;
+    while (p < pageEnd) {
+        if (*p == '<') {
+            if (p + 3 < pageEnd && strncmp(p, "<li", 3) == 0) {
+                depth++;
+            } else if (p + 4 < pageEnd && strncmp(p, "</li>", 5) == 0) {
+                depth--;
+                if (depth == 0) return p + 5;
+            }
+        }
+        p++;
+    }
+    return pageEnd;
+}
+
 int IdalgoParser::parseChunk(const char* chunk, size_t len,
                               CompetitionData& out, bool isLast) {
     const char* pos = chunk;
@@ -184,9 +219,7 @@ int IdalgoParser::parseChunk(const char* chunk, size_t len,
         const char* divStart = strstr(pos, "<div class=\"div_idalgo_dom_match div_idalgo_dom_match_rugby");
         if (!divStart) break;
 
-        const char* blockEnd = strstr(divStart, "</li>");
-        if (blockEnd) blockEnd += 5; // include </li>
-        else blockEnd = end;
+        const char* blockEnd = findLiEnd(divStart, end);
 
         if (!isLast && blockEnd == end) break;
 
@@ -587,8 +620,7 @@ int IdalgoParser::parseCalendarChunk(const char* chunk, size_t len,
     while (pos < end && tempCount < tempMax) {
         const char* liStart = strstr(pos, "<li class=\"li_idalgo_content_calendar_cup_date_match\"");
         if (!liStart) break;
-        const char* liEnd = strstr(liStart, "</li>");
-        if (!liEnd) break;
+        const char* liEnd = findLiEnd(liStart, end);
 
         MatchData m = {};
         m.home_score = -1; m.away_score = -1;
