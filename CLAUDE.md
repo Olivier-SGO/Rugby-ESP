@@ -176,6 +176,35 @@ After boot: ~90KB free. After web services start: ~40–50KB.
 
 ---
 
+## Session History (2026-06-28) — v1.6.0
+
+### Symptôme
+
+Plus de mises à jour T14/ProD2 après les barrages (« 1/4F ») : demi-finales et finale jamais affichées.
+
+### Diagnostic (via moniteur série sur la carte)
+
+- Les slugs `barrages` / `demi-finales` / `finale` sont **corrects** et les pages sont servies par le **même template** (si les barrages parsent, tout parse). Le `fetchRotating` récupérait bien `+2 / +2 / +1` — donc ni slug, ni parsing.
+- Le vrai problème était au **boot** : juste après l'association WiFi, **le DNS n'est pas prêt** quelques secondes → `DNS test FAILED`, `NTP FAILED`, puis **rafale de ~9 connexions TLS refusées** (`HTTP -1 connection refused`, heap figé = refus TCP instantané, pas un manque de heap). Le `fetchRotating` (1 compétition / 3 min, espacé) marchait ; le `fetchAll` du boot (toutes comps + phases en rafale) échouait.
+
+### Changes Made
+
+1. **Attente DNS active** (`DataFetcher::connectWiFi`) — boucle `WiFi.hostByName` (≤15× 1s) jusqu'à résolution réelle avant de rendre la main. Remplace le test DNS unique.
+2. **NTP par IP en fallback** (`syncNTP`) — `configTime(0,0,"time.cloudflare.com","162.159.200.1","216.239.35.0")`. La synchro horaire ne dépend plus du DNS.
+3. **Chauffe boot 5 s** (`fetchAll`, ex-1 s) — le lien « froid » se stabilise avant le 1ᵉʳ handshake. **C'est ce qui supprime les `connection refused`** (aucun retry ne s'est déclenché après ce fix).
+4. **Retry TLS + espacement** — `IdalgoParser::fetch`/`fetchCalendar` : 3 tentatives, backoff 3 s, `client.stop()` entre chaque, sur erreur de connexion (HTTP < 0 uniquement ; 404/5xx non réessayés). Espacement des fetches de phases 800 ms → 3 s. Filet anti-rafale.
+5. **Résilience phases finales** — `enrichWithFinalPhases` est désormais appelé **même si la base `phase-reguliere/resultats` échoue**, et le DB est mis à jour si les phases ont ramené des données (standings préservés : `mergeCompetition` ne remplace le classement que si non vide). Évite le gel sur les barrages en fin de saison.
+6. **Docs** — README + ce fichier : commandes `pio` prêtes à coller (chemin binaire `~/Library/Python/3.9/bin/pio`, port `/dev/cu.usbmodem1101`, `pio device monitor`).
+
+### Key Rules for Future Sessions
+
+- **Le boot fetch (`fetchAll`) bombarde le serveur** : après l'association WiFi, attendre que le DNS résolve réellement + chauffe ≥5 s, et espacer les handshakes TLS. Les `connection refused` en rafale = lien froid / throttling, **pas** un manque de heap (le heap reste figé sur les échecs).
+- **`pio device monitor` exige un vrai TTY** — il plante (`termios.error`) si stdout est redirigé/pipé. macOS n'a ni `timeout` ni `gtimeout`. Depuis un agent : faire lancer le moniteur par l'utilisateur, ou un lecteur pyserial.
+- **`barrages`/`demi-finales`/`finale` = même template HTML** que `phase-reguliere` : un seul parseur, pas de cas particulier. Labels : barrages→`1/4F`, demi-finales→`1/2F`, finale→`Finale`.
+- **Release** : `tools/create_release.sh vX.Y.Z` (bump `FIRMWARE_VERSION` dans `config.h` d'abord) → build + `version.json` + `gh release` sur `Olivier-SGO/rugby-display-releases`.
+
+---
+
 ## Session History (2026-06-06)
 
 ### Changes Made
