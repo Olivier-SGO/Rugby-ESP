@@ -70,6 +70,11 @@
 
 ### Build & Flash
 
+> **macOS — `pio` introuvable ?** Installé via `pip install --user platformio`, le binaire est dans `~/Library/Python/3.9/bin/` qui n'est pas dans le PATH par défaut. Ajoute-le pour la session (ou mets-le dans ton `~/.zshrc`) :
+> ```bash
+> export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+> ```
+
 ```bash
 # Cloner
 git clone https://github.com/Olivier-SGO/Rugby-ESP.git
@@ -85,7 +90,21 @@ pio run -e matrixportal_s3 --target upload
 pio run -e matrixportal_s3 --target uploadfs
 ```
 
+### Moniteur série & port
+
+```bash
+# Lister les ports (repérer "MatrixPortal ESP32-S3")
+pio device list
+
+# Ouvrir le moniteur série (port actuel : /dev/cu.usbmodem1101)
+pio device monitor -p /dev/cu.usbmodem1101 -b 115200
+
+# Forcer le port pour le flash si l'auto-détection échoue
+pio run -e matrixportal_s3 --target upload --upload-port /dev/cu.usbmodem1101
+```
+
 > **Note** : Fermer le moniteur série avant le flash. Sur MatrixPortal S3, double-cliquez RESET si le flash échoue.
+> Le moniteur a besoin d'un **vrai terminal (TTY)** : ne le redirige pas vers un fichier ni ne le pipe dans `grep` (erreur `termios`). Pour quitter : `Ctrl-C`.
 
 ---
 

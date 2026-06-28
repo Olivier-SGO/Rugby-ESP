@@ -78,13 +78,21 @@ void DataFetcher::connectWiFi() {
                       WiFi.localIP().toString().c_str(),
                       WiFi.gatewayIP().toString().c_str(),
                       WiFi.dnsIP().toString().c_str());
-        // Quick DNS test
+        // Wait for DNS to become functional. Right after DHCP, lwIP has the
+        // resolver address but the first queries fail for a few seconds until the
+        // AP starts forwarding — that breaks NTP and the very first fetch at boot.
+        // Poll until a real resolution succeeds (up to ~15s) before returning.
         IPAddress testIp;
-        if (WiFi.hostByName("www.ladepeche.fr", testIp)) {
-            Serial.printf("DNS test: www.ladepeche.fr → %s\n", testIp.toString().c_str());
-        } else {
-            Serial.println("DNS test: www.ladepeche.fr → FAILED");
+        bool dnsOk = false;
+        for (int i = 0; i < 15; i++) {
+            if (WiFi.hostByName("www.ladepeche.fr", testIp) && testIp != IPAddress(0, 0, 0, 0)) {
+                Serial.printf("DNS test: www.ladepeche.fr → %s (try %d)\n", testIp.toString().c_str(), i + 1);
+                dnsOk = true;
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
+        if (!dnsOk) Serial.println("DNS test: www.ladepeche.fr → FAILED after 15s, proceeding anyway");
     }
 }
 
@@ -95,7 +103,9 @@ void DataFetcher::syncNTP() {
     if (!configured) {
         setenv("TZ", "CET-1CEST,M3.5.0,M10.5.0/3", 1);
         tzset();
-        configTime(0, 0, "pool.ntp.org", "time.google.com");
+        // Cloudflare hostname + two NTP IPs (Cloudflare, Google) as fallback so
+        // time sync still works when DNS is momentarily unavailable at boot.
+        configTime(0, 0, "time.cloudflare.com", "162.159.200.1", "216.239.35.0");
         configured = true;
     }
     Serial.print("NTP sync");
@@ -197,9 +207,12 @@ void DataFetcher::fetchRotating() {
             CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
             if (d) {
                 memset(d, 0, sizeof(CompetitionData));
-                if (idalgo.fetch(top14Base, *d)) {
-                    fetchNextJournee(*d, top14Base, idalgo);
-                    enrichWithFinalPhases(*d, top14Base, idalgo);
+                bool baseOk = idalgo.fetch(top14Base, *d);
+                if (baseOk) fetchNextJournee(*d, top14Base, idalgo);
+                // Final phases live on separate pages — fetch them even if the
+                // regular-phase page no longer responds after season end.
+                enrichWithFinalPhases(*d, top14Base, idalgo);
+                if (baseOk || d->result_count > 0 || d->fixture_count > 0) {
                     _db->updateTop14(*d);
                     fetched = true;
                 }
@@ -210,9 +223,12 @@ void DataFetcher::fetchRotating() {
             CompetitionData* d = (CompetitionData*)heap_caps_malloc(sizeof(CompetitionData), MALLOC_CAP_SPIRAM);
             if (d) {
                 memset(d, 0, sizeof(CompetitionData));
-                if (idalgo.fetch(prod2Base, *d)) {
-                    fetchNextJournee(*d, prod2Base, idalgo);
-                    enrichWithFinalPhases(*d, prod2Base, idalgo);
+                bool baseOk = idalgo.fetch(prod2Base, *d);
+                if (baseOk) fetchNextJournee(*d, prod2Base, idalgo);
+                // Final phases live on separate pages — fetch them even if the
+                // regular-phase page no longer responds after season end.
+                enrichWithFinalPhases(*d, prod2Base, idalgo);
+                if (baseOk || d->result_count > 0 || d->fixture_count > 0) {
                     _db->updateProd2(*d);
                     fetched = true;
                 }
@@ -254,8 +270,10 @@ void DataFetcher::fetchAll(bool forceAll) {
     }
 
     releaseTLSReserve();
-    // Let lwIP stabilize after WiFi connect/NTP before any TLS handshake
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Let lwIP stabilize after WiFi connect/NTP before any TLS handshake.
+    // Boot warm-up: the link is "cold" for a few seconds after association and the
+    // first TLS connections get refused — wait longer here to avoid a wasted burst.
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     if (ESP.getFreeHeap() < 50000) {
         Serial.printf("[FETCH] freeHeap=%u < 50K, aborting fetchAll\n", ESP.getFreeHeap());
@@ -300,13 +318,18 @@ void DataFetcher::fetchAll(bool forceAll) {
     if ((forceAll || prefs.comp[0].enabled) && top14) {
         if (forceAll && !prefs.comp[0].enabled) Serial.println("[FETCH] Top14 forced (boot)");
         Serial.println("[FETCH] before Top14 fetch");
-        if (idalgo.fetch(top14Base, *top14)) {
-            Serial.println("[FETCH] Top14 fetch OK, before updateTop14");
-            enrichWithFinalPhases(*top14, top14Base, idalgo);
+        bool t14Base = idalgo.fetch(top14Base, *top14);
+        if (!t14Base)
+            Serial.println("[FETCH] Top14 base (phase-reguliere) fetch failed — trying final phases anyway");
+        // Final phases live on separate pages — fetch them even if the regular-phase
+        // page no longer responds after season end (otherwise updates freeze on barrages).
+        enrichWithFinalPhases(*top14, top14Base, idalgo);
+        if (t14Base || top14->result_count > 0 || top14->fixture_count > 0) {
             _db->updateTop14(*top14);
-            Serial.println("[FETCH] after updateTop14");
+            Serial.printf("[FETCH] updateTop14 done (base=%d, %d res, %d fix)\n",
+                          t14Base, top14->result_count, top14->fixture_count);
         } else {
-            Serial.println("[FETCH] Top14 fetch failed, continuing");
+            Serial.println("[FETCH] Top14: no data at all, skipping updateTop14");
         }
         Serial.printf("[FETCH] after Top14: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
         vTaskDelay(pdMS_TO_TICKS(3000));
@@ -317,13 +340,18 @@ void DataFetcher::fetchAll(bool forceAll) {
     if ((forceAll || prefs.comp[1].enabled) && prod2) {
         if (forceAll && !prefs.comp[1].enabled) Serial.println("[FETCH] ProD2 forced (boot)");
         Serial.println("[FETCH] before ProD2 fetch");
-        if (idalgo.fetch(prod2Base, *prod2)) {
-            Serial.println("[FETCH] ProD2 fetch OK, before updateProd2");
-            enrichWithFinalPhases(*prod2, prod2Base, idalgo);
+        bool pd2Base = idalgo.fetch(prod2Base, *prod2);
+        if (!pd2Base)
+            Serial.println("[FETCH] ProD2 base (phase-reguliere) fetch failed — trying final phases anyway");
+        // Final phases live on separate pages — fetch them even if the regular-phase
+        // page no longer responds after season end (otherwise updates freeze on barrages).
+        enrichWithFinalPhases(*prod2, prod2Base, idalgo);
+        if (pd2Base || prod2->result_count > 0 || prod2->fixture_count > 0) {
             _db->updateProd2(*prod2);
-            Serial.println("[FETCH] after updateProd2");
+            Serial.printf("[FETCH] updateProd2 done (base=%d, %d res, %d fix)\n",
+                          pd2Base, prod2->result_count, prod2->fixture_count);
         } else {
-            Serial.println("[FETCH] ProD2 fetch failed, continuing");
+            Serial.println("[FETCH] ProD2: no data at all, skipping updateProd2");
         }
         Serial.printf("[FETCH] after ProD2: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
     } else {
@@ -424,6 +452,7 @@ void DataFetcher::enrichWithFinalPhases(CompetitionData& d, const char* compPath
         if (!pd) continue;
         memset(pd, 0, sizeof(CompetitionData));
 
+        Serial.printf("[FETCH] Phase %s fetch (heap=%u)...\n", PHASES[p].slug, ESP.getFreeHeap());
         if (idalgo.fetch(url, *pd)) {
             if (pd->result_count > 0 || pd->fixture_count > 0) {
                 gotPhaseData = true;
@@ -453,6 +482,7 @@ void DataFetcher::enrichWithFinalPhases(CompetitionData& d, const char* compPath
                           d.result_count, d.fixture_count);
         }
         heap_caps_free(pd);
+        vTaskDelay(pdMS_TO_TICKS(3000)); // space TLS handshakes — boot bursts get refused
     }
 
     // When final phases are active (any phase page returned data), drop *all* regular-season

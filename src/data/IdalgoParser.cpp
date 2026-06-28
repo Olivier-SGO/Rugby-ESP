@@ -137,16 +137,29 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     client.setTimeout(30000); // 30s for the whole connect operation
     HTTPClient http;
     http.setTimeout(60000);
-    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
-    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
-    http.addHeader("Accept-Encoding", "identity");
-    http.begin(client, url);
-    int code = http.GET();
-    if (code != 200) {
-        Serial.printf("Idalgo %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
-        http.end();
-        return false;
+
+    // Retry on connection errors (HTTP < 0). At boot, a burst of TLS connections
+    // to ladepeche gets refused (TCP RST); a short backoff lets the link/server settle.
+    // A real HTTP status (404, 5xx) is not retried.
+    int code = -1;
+    for (int attempt = 0; attempt < 3 && code != 200; attempt++) {
+        if (attempt > 0) {
+            client.stop();
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            Serial.printf("Idalgo retry %d: %s\n", attempt, url);
+        }
+        http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
+        http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
+        http.addHeader("Accept-Encoding", "identity");
+        http.begin(client, url);
+        code = http.GET();
+        if (code != 200) {
+            Serial.printf("Idalgo %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
+            http.end();
+            if (code > 0) return false; // real HTTP status — don't retry
+        }
     }
+    if (code != 200) return false;
 
     String enc = http.header("Content-Encoding");
     Serial.printf("Idalgo: HTTP 200, Content-Encoding=%s\n", enc.c_str());
@@ -497,17 +510,27 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     client.setTimeout(30000); // 30s for the whole connect operation
     HTTPClient http;
     http.setTimeout(60000);
-    http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
-    http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
-    http.addHeader("Accept-Encoding", "identity");
-    http.begin(client, url);
-    int code = http.GET();
-    if (code != 200) {
-        Serial.printf("IdalgoCalendar %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
-        http.end();
-        heap_caps_free(temp);
-        return false;
+
+    // Same retry-on-connection-error policy as fetch() (boot bursts get refused).
+    int code = -1;
+    for (int attempt = 0; attempt < 3 && code != 200; attempt++) {
+        if (attempt > 0) {
+            client.stop();
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            Serial.printf("IdalgoCalendar retry %d: %s\n", attempt, url);
+        }
+        http.addHeader("User-Agent", "Mozilla/5.0 (compatible)");
+        http.addHeader("Accept-Language", "fr-FR,fr;q=0.9");
+        http.addHeader("Accept-Encoding", "identity");
+        http.begin(client, url);
+        code = http.GET();
+        if (code != 200) {
+            Serial.printf("IdalgoCalendar %s → HTTP %d (%s)\n", url, code, http.errorToString(code).c_str());
+            http.end();
+            if (code > 0) { heap_caps_free(temp); return false; } // real HTTP status — don't retry
+        }
     }
+    if (code != 200) { heap_caps_free(temp); return false; }
 
     String enc = http.header("Content-Encoding");
     Serial.printf("IdalgoCalendar: HTTP 200, Content-Encoding=%s\n", enc.c_str());

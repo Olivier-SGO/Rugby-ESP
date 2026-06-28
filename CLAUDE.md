@@ -26,11 +26,21 @@ Full spec: `prompt_ESP.md`. Design doc: `docs/superpowers/specs/2026-04-14-rugby
 ## Build
 
 ```bash
+# pio n'est PAS dans le PATH (install pip --user). Préfixe chaque session :
+export PATH="$HOME/Library/Python/3.9/bin:$PATH"   # binaire: ~/Library/Python/3.9/bin/pio
+
 pio run -e matrixportal_s3              # build
 pio run -e matrixportal_s3 --target upload     # firmware
 pio run -e matrixportal_s3 --target uploadfs   # LittleFS (logos + web UI)
 python3 tools/convert_logos.py          # regenerate logos → data/logos/*.bin
+
+# Port carte : /dev/cu.usbmodem1101 (MatrixPortal ESP32-S3, VID 239A). `pio device list` pour confirmer.
+pio device list                                                # lister les ports
+pio device monitor -p /dev/cu.usbmodem1101 -b 115200           # moniteur série (BESOIN d'un vrai TTY)
+pio run -e matrixportal_s3 --target upload --upload-port /dev/cu.usbmodem1101  # flash port forcé
 ```
+
+> **Moniteur série depuis un agent** : `pio device monitor` échoue si stdout n'est pas un TTY (`termios.error`) — il ne peut donc pas être redirigé/pipé. macOS n'a pas `timeout` (ni `gtimeout`). Pour capturer le log côté outillage, lancer la commande dans un vrai terminal, ou utiliser un lecteur pyserial. Côté agent : demander à l'utilisateur de coller les lignes.
 
 Key `platformio.ini` flags:
 - `-DBOARD_HAS_PSRAM`, `board_build.arduino.memory_type = qio_qspi`
