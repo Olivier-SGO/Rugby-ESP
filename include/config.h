@@ -7,7 +7,12 @@
 //  Validated: boot fetch 3 comps, HTML entities decode, div_idalgo delimiter,
 //             full-page parse (PSRAM), Web UI, LittleFS, logos, standings
 // ═════════════════════════════════════════════════════════════════════════════
-#define FIRMWARE_VERSION "1.6.0"
+#define FIRMWARE_VERSION "1.7.0"
+
+// Bump whenever TEAM_TABLE changes for a new season (promotions/relegations/CC draw).
+// MatchDB wipes cache.json on boot if its stored tag doesn't match — makes the reset
+// automatic on any firmware update (manual flash OR OTA), no HTTP call required.
+#define SEASON_TAG "2026-2027"
 
 // ── Display ──────────────────────────────────────────────────────────────────
 #define PANEL_W       128

@@ -1,5 +1,6 @@
 #include "MatchDB.h"
 #include "MatchRecord.h"
+#include "config.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "JsonAllocator.h"
@@ -230,6 +231,7 @@ static void deserializeCompetition(JsonObjectConst obj, CompetitionData& d) {
 void MatchDB::persist() {
     xSemaphoreTake(_mutex, portMAX_DELAY);
     JsonDocument doc(&spiRamAlloc);
+    doc["season"] = SEASON_TAG;
     serializeCompetition(doc["t14"].to<JsonObject>(), _top14);
     serializeCompetition(doc["pd2"].to<JsonObject>(), _prod2);
     serializeCompetition(doc["cc" ].to<JsonObject>(), _cc);
@@ -243,9 +245,20 @@ void MatchDB::load() {
     if (!f) return;
     JsonDocument doc(&spiRamAlloc);
     if (deserializeJson(doc, f) == DeserializationError::Ok) {
-        deserializeCompetition(doc["t14"], _top14);
-        deserializeCompetition(doc["pd2"], _prod2);
-        deserializeCompetition(doc["cc"],  _cc);
+        // Cache from a previous season (different TEAM_TABLE/round_ids) — discard it
+        // instead of loading stale standings/results. Runs on every boot, so it also
+        // covers devices updated via OTA (no manual /reset-cache call needed).
+        const char* season = doc["season"] | "";
+        if (strcmp(season, SEASON_TAG) == 0) {
+            deserializeCompetition(doc["t14"], _top14);
+            deserializeCompetition(doc["pd2"], _prod2);
+            deserializeCompetition(doc["cc"],  _cc);
+        } else {
+            f.close();
+            LittleFS.remove("/cache.json");
+            LittleFS.remove("/cc_data.bin");
+            return;
+        }
     }
     f.close();
 

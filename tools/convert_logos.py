@@ -93,9 +93,8 @@ CLUBS = [
     ("oyonnax",         None),
     ("aurillac",        None),
     ("grenoble",        None),
-    ("rouen",           None),
     ("nevers",          None),
-    ("carcassonne",     None),
+    ("nissa",           "https://upload.wikimedia.org/wikipedia/fr/6/66/Logo_Stade_ni%C3%A7ois.png"),
     ("valence-romans",  None),
     ("provence",        "https://cdn.lnr.fr/club/provence-rugby/photo/logo-thumbnail-2x.5ab42ba7610b284f40f993f6a452bec5362fa8b6"),
     ("angouleme",       None),
@@ -103,7 +102,6 @@ CLUBS = [
     # Pro D2 (additional)
     ("agen",            None),
     ("biarritz",        "https://upload.wikimedia.org/wikipedia/fr/thumb/9/94/B_O.svg/250px-B_O.svg.png"),
-    ("mont-de-marsan",  None),
     ("dax",             None),
     ("beziers",         None),
     ("colomiers",       None),
@@ -112,7 +110,6 @@ CLUBS = [
     ("bath",            "https://media-cdn.incrowdsports.com/f4d9a293-9086-41bf-aa1b-c98d1c62fe3b.png"),
     ("glasgow",         "https://media-cdn.incrowdsports.com/f0e4ca1a-3001-42d4-a134-befe8348540c.png"),
     ("munster",         "https://upload.wikimedia.org/wikipedia/fr/thumb/9/94/Munster_Rugby_%28logo%29.svg/250px-Munster_Rugby_%28logo%29.svg.png"),
-    ("ulster",          "https://upload.wikimedia.org/wikipedia/fr/c/c0/Ulster_Rugby_logo.svg"),
     ("northampton",     "https://upload.wikimedia.org/wikipedia/fr/thumb/9/92/Logo_Northampton_Saints_2024.png/250px-Logo_Northampton_Saints_2024.png"),
     ("exeter",          "https://c.files.bbci.co.uk/AEDA/production/_123026744_exeterchiefsmasterlogorgbwhite2022-01.jpg"),
     # Champions Cup (missing)
@@ -120,19 +117,19 @@ CLUBS = [
     ("sale",            "https://r2.thesportsdb.com/images/media/team/badge/nbl5tt1552065785.png"),
     ("gloucester",      "https://upload.wikimedia.org/wikipedia/en/thumb/2/20/Gloucester_Rugby_logo.svg/1280px-Gloucester_Rugby_logo.svg.png"),
     ("bristol",         "https://upload.wikimedia.org/wikipedia/en/thumb/0/02/Bristol_Bears_logo.svg/1280px-Bristol_Bears_logo.svg.png"),
-    ("harlequins",      "https://upload.wikimedia.org/wikipedia/en/thumb/9/92/Harlequin_FC_logo.svg/960px-Harlequin_FC_logo.svg.png"),
-    ("edinburgh",       "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Edinburgh_Rugby_logo.svg/1280px-Edinburgh_Rugby_logo.svg.png"),
-    ("scarlets",        "https://upload.wikimedia.org/wikipedia/en/thumb/0/07/Scarlets_logo.svg/1280px-Scarlets_logo.svg.png"),
+    ("cardiff",         "https://upload.wikimedia.org/wikipedia/en/thumb/1/1f/Cardiff_Rugby_logo_%282021%29.jpg/250px-Cardiff_Rugby_logo_%282021%29.jpg"),
     ("stormers",        "https://upload.wikimedia.org/wikipedia/en/thumb/e/e3/Stormers_logo.svg/1280px-Stormers_logo.svg.png"),
     ("bulls",           "https://toppng.com/uploads/preview/bulls-rugby-logo-115487946485y6k2euk8w.png"),
     ("lions",           "https://upload.wikimedia.org/wikipedia/en/e/e6/Lions_rugby_logo_2007.png"),
-    ("sharks",          "https://upload.wikimedia.org/wikipedia/en/thumb/9/9f/Sharks_rugby_union_logo.png/250px-Sharks_rugby_union_logo.png"),
     ("saracens",        "https://upload.wikimedia.org/wikipedia/en/thumb/3/3f/Saracens_F.C._Logo.svg/1280px-Saracens_F.C._Logo.svg.png"),
     ("leicester",       "https://upload.wikimedia.org/wikipedia/en/thumb/a/ac/Leicester_Tigers_logo.svg/1280px-Leicester_Tigers_logo.svg.png"),
 ]
 
 print("Converting club logos...")
+only = set(sys.argv[1:]) or None
 for slug, override in CLUBS:
+    if only and slug not in only:
+        continue
     url = override or LNR_CDN.format(slug=slug)
     to_rgb565(url, LG, os.path.join(OUTPUT_DIR, f"{slug}.bin"))
     to_rgb565(url, SM, os.path.join(OUTPUT_DIR, f"{slug}_sm.bin"))

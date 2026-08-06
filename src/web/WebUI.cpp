@@ -81,6 +81,16 @@ void WebUI::begin(MatchDB* db) {
         _restartPending = true;
     });
 
+    // POST /reset-cache — manual override; MatchDB::load() already auto-purges the
+    // cache when SEASON_TAG (config.h) changes, so devices updated via OTA self-purge
+    // without this endpoint. Kept for manual testing / forcing a purge without a version bump.
+    server.on("/reset-cache", HTTP_POST, [this]() {
+        LittleFS.remove("/cache.json");
+        LittleFS.remove("/cc_data.bin");
+        server.send(200, "text/plain", "Cache cleared, restarting...");
+        _restartPending = true;
+    });
+
     // GET /next-scene
     server.on("/next-scene", HTTP_GET, []() {
         Scenes.nextScene();

@@ -176,6 +176,32 @@ After boot: ~90KB free. After web services start: ~40–50KB.
 
 ---
 
+## Session History (2026-08-05) — v1.7.0
+
+### Contexte
+
+Préparation de la saison 2026-2027 (montées/descentes Top14/ProD2, nouvelle liste Champions Cup). Ajout d'un skill réutilisable (`.claude/skills/season-init/`) pour refaire cette opération chaque saison.
+
+### Changes Made
+
+1. **`TEAM_TABLE` mis à jour** (`include/TeamData.h`) — Pro D2 : ajout `Nissa Rugby` (promu de Nationale), retrait `Rouen`/`Carcassonne`/`Mont-de-Marsan` (relégués en Nationale, palier non suivi par l'app). Champions Cup : ajout `Cardiff Rugby` (nouvel qualifié URC), retrait `Ulster`/`Harlequins`/`Edinburgh`/`Scarlets`/`Sharks` (non qualifiés cette saison). Top14 inchangé (déjà à jour depuis une itération précédente).
+2. **Logos** (`tools/convert_logos.py` + `data/logos/`) — `CLUBS` mis à jour en miroir de `TEAM_TABLE`. Ajout d'un filtre en argv (`python3 tools/convert_logos.py <slug> ...`) pour ne régénérer qu'un sous-ensemble sans re-télécharger tous les logos existants (utile pour éviter le rate-limit Wikimedia lors d'un ajout ponctuel).
+3. **Purge de cache automatique par tag de saison** (`include/config.h` : `SEASON_TAG`, `src/data/MatchDB.cpp` : `persist()`/`load()`) — `persist()` écrit `SEASON_TAG` dans `cache.json` ; `load()` compare au tag compilé et, en cas de mismatch (ou tag absent), ignore le contenu et supprime `/cache.json` + `/cc_data.bin` au lieu de charger des données obsolètes. **S'exécute à chaque boot**, donc fonctionne aussi pour les cartes mises à jour par **OTA** (pas d'accès réseau/local nécessaire pour déclencher la purge). Penser à bumper `SEASON_TAG` à chaque saison, en même temps que `TEAM_TABLE`.
+4. **Endpoint `POST /reset-cache`** (`src/web/WebUI.cpp`, à côté de `/restart`) — conservé comme purge manuelle (tests, forcer un reset sans bump de version) mais n'est plus le mécanisme principal.
+5. **Skill `season-init`** (`.claude/skills/season-init/SKILL.md`) — procédure complète pour répéter cette opération chaque saison (recherche web des compositions officielles, mise à jour TEAM_TABLE/logos, vérification visuelle, purge cache, build/déploiement).
+
+### Key Rules for Future Sessions
+
+- **Les compositions de saison (montées/descentes/qualifications CC) sont des données réelles hors connaissances d'entraînement** — toujours vérifier via WebSearch/WebFetch au moment de la mise à jour, jamais deviner à partir d'une saison antérieure connue.
+- **`cache.json`/`cc_data.bin` survivent à un `uploadfs`** — ce ne sont pas des fichiers du dossier `data/` du repo, ils sont écrits par la carte elle-même. **Ne pas compter sur un appel HTTP manuel pour la purge** : certaines cartes ne sont mises à jour que par OTA (pas d'accès réseau local/USB) — la purge doit être déclenchée par le firmware lui-même au boot (`SEASON_TAG` dans `config.h`, comparé dans `MatchDB::load()`), pas par un endpoint à appeler à la main.
+- **`persistCCBinary`/`loadCCBinary` (`MatchDB.cpp`) sont du code mort** — jamais appelés ailleurs dans le code ; `/cc_data.bin` n'est actuellement écrit/lu par aucun chemin d'exécution réel (CC est en fait persisté via `cache.json` comme T14/ProD2). Ne pas supposer que ce fichier contient des données à jour sans vérifier qui l'écrit.
+- **Wikimedia répond en 429 (rate limit) si on télécharge trop de logos d'affilée** — `convert_logos.py` accepte maintenant un filtre en argv pour ne relancer que les slugs concernés, avec un `sleep` entre tentatives en cas de 429.
+- **Les previews PNG de logos écrites dans le scratchpad de session sont éphémères** — si l'utilisateur doit les revoir plus tard ou dans une autre session, les régénérer à la demande (cf. script dans `season-init` SKILL.md) plutôt que de renvoyer vers un chemin `/private/tmp/...` qui peut avoir disparu.
+- **Les `.bin` de logos sont du RGB565 brut non visualisable directement** — toujours reconvertir en PNG (RGB565→RGB888 big-endian, upscale `NEAREST`) avant de valider visuellement un nouveau logo, en particulier la version `_sm` (16×16, classements) où le texte devient vite illisible.
+- **`findTeam()` a un fallback gracieux** (log Serial `"Unknown ... team: '...'"`, affichage du nom brut sans logo, pas de crash) si un nom Idalgo ne matche aucune entrée de `TEAM_TABLE` — utile pour diagnostiquer un nom mal deviné pour un nouveau club sans bloquer l'affichage des autres matchs.
+
+---
+
 ## Session History (2026-06-28) — v1.6.0
 
 ### Symptôme

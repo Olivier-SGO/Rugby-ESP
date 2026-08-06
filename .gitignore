@@ -2,6 +2,7 @@
 include/credentials.h
 *.bin
 data/logos/
+tools/logo_previews/
 .DS_Store
 .vscode/
 *.elf
