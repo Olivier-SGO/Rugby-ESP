@@ -63,9 +63,9 @@ void FixturesScene::render() {
     }
 
     // Team abbreviations with shadow, pushed to edges
-    Display.drawTextShadow(CENTER_X + 2, 36, _md.home_abbrev, C_WHITE, f8);
+    Display.drawTextShadow(CENTER_X + 2, 33, _md.home_abbrev, C_WHITE, f8);
     Display.getTextBounds(_md.away_abbrev, 0, 0, &x1, &y1, &tw, &th, f8);
-    Display.drawTextShadow(CENTER_X + CENTER_W - tw - 2, 36, _md.away_abbrev, C_WHITE, f8);
+    Display.drawTextShadow(CENTER_X + CENTER_W - tw - 2, 33, _md.away_abbrev, C_WHITE, f8);
 
     // Date + time centered
     if (_md.kickoff_utc > 0) {

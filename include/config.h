@@ -7,7 +7,7 @@
 //  Validated: boot fetch 3 comps, HTML entities decode, div_idalgo delimiter,
 //             full-page parse (PSRAM), Web UI, LittleFS, logos, standings
 // ═════════════════════════════════════════════════════════════════════════════
-#define FIRMWARE_VERSION "1.7.0"
+#define FIRMWARE_VERSION "1.8.0"
 
 // Bump whenever TEAM_TABLE changes for a new season (promotions/relegations/CC draw).
 // MatchDB wipes cache.json on boot if its stored tag doesn't match — makes the reset

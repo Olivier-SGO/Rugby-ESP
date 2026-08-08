@@ -259,6 +259,25 @@ void DataFetcher::fetchRotating() {
     if (_rendererHandle) vTaskResume(_rendererHandle);
 }
 
+// Sort fixtures chronologically (TBD kickoff = 0 sorts last) so that when a fetch stage
+// hits CompetitionData::MAX_MATCHES, what's displayed/kept is the soonest matches rather
+// than whatever order the base round / next-journee / final-phase fetches happened to add them in.
+static void sortFixturesChronologically(CompetitionData& d) {
+    for (int i = 0; i < d.fixture_count - 1; i++) {
+        for (int j = 0; j < d.fixture_count - i - 1; j++) {
+            time_t a = d.fixtures[j].kickoff_utc;
+            time_t b = d.fixtures[j+1].kickoff_utc;
+            if (a == 0) a = (time_t)0x7FFFFFFF;
+            if (b == 0) b = (time_t)0x7FFFFFFF;
+            if (a > b) {
+                MatchData tmp = d.fixtures[j];
+                d.fixtures[j] = d.fixtures[j+1];
+                d.fixtures[j+1] = tmp;
+            }
+        }
+    }
+}
+
 void DataFetcher::fetchAll(bool forceAll) {
     FetchingFlag fetching;
     if (_rendererHandle) vTaskSuspend(_rendererHandle);
@@ -306,9 +325,13 @@ void DataFetcher::fetchAll(bool forceAll) {
         Serial.println("[FETCH] before CC fetch");
         ccOk = fetchCC(idalgo, *cc);
         Serial.printf("[FETCH] after CC fetch: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
-        if (ccOk) {
+        // HTTP 200 doesn't guarantee real content — a rate-limited/blocked response can still
+        // return a generic page with no usable matches. Don't let that wipe a good cache.
+        if (ccOk && (cc->result_count > 0 || cc->fixture_count > 0 || cc->standing_count > 0)) {
             _db->updateCC(*cc);
             Serial.printf("[FETCH] after CC updateDB: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
+        } else if (ccOk) {
+            Serial.println("[FETCH] CC: fetch OK but no usable data — keeping previous cache");
         }
         vTaskDelay(pdMS_TO_TICKS(3000));
     } else {
@@ -324,6 +347,7 @@ void DataFetcher::fetchAll(bool forceAll) {
         // Final phases live on separate pages — fetch them even if the regular-phase
         // page no longer responds after season end (otherwise updates freeze on barrages).
         enrichWithFinalPhases(*top14, top14Base, idalgo);
+        sortFixturesChronologically(*top14);
         if (t14Base || top14->result_count > 0 || top14->fixture_count > 0) {
             _db->updateTop14(*top14);
             Serial.printf("[FETCH] updateTop14 done (base=%d, %d res, %d fix)\n",
@@ -346,6 +370,7 @@ void DataFetcher::fetchAll(bool forceAll) {
         // Final phases live on separate pages — fetch them even if the regular-phase
         // page no longer responds after season end (otherwise updates freeze on barrages).
         enrichWithFinalPhases(*prod2, prod2Base, idalgo);
+        sortFixturesChronologically(*prod2);
         if (pd2Base || prod2->result_count > 0 || prod2->fixture_count > 0) {
             _db->updateProd2(*prod2);
             Serial.printf("[FETCH] updateProd2 done (base=%d, %d res, %d fix)\n",
@@ -439,6 +464,17 @@ void DataFetcher::enrichWithFinalPhases(CompetitionData& d, const char* compPath
     };
 
     const char* comp = strstr(compPath, "top-14") ? "top-14" : "pro-d2";
+
+    // Barrages/demi-finales/finale only exist once the regular season is over.
+    // Top14 = 14 clubs → 26 journées ; ProD2 = 16 clubs → 30 journées (double round-robin).
+    // Fetching these pages earlier just pulls placeholder blocks (no teams yet, kickoff
+    // dates far in the future) from ladepeche.fr's calendar template — skip until then.
+    const uint8_t regularSeasonRounds = (strcmp(comp, "top-14") == 0) ? 26 : 30;
+    if (d.current_round < regularSeasonRounds) {
+        Serial.printf("[FETCH] %s: regular season not finished (round %d/%d) — skipping final phases\n",
+                      comp, d.current_round, regularSeasonRounds);
+        return;
+    }
 
     bool gotPhaseData = false;
 

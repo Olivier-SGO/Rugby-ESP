@@ -33,7 +33,7 @@ static const TeamEntry TEAM_TABLE[] = {
   {"Aurillac",            "SC Aurillac",                  "Aurillac",               "Aurillac",          "SCA",  "aurillac"},
   {"Grenoble",            "FC Grenoble",                  "Grenoble",               "Grenoble",          "FCG",  "grenoble"},
   {"Nevers",              "SC Nevers",                    "Nevers",                 "Nevers",            "SCN",  "nevers"},
-  {"Nissa Rugby",         "Nissa Rugby",                  "Nissa Rugby",            "Nissa Rugby",       "NIS",  "nissa"},
+  {"Nice",                "Nissa Rugby",                  "Nissa Rugby",            "Nissa Rugby",       "NIS",  "nissa"},
   {"Valence Romans",      "Valence Romans Drome Rugby",   "Valence Romans",         "Valence Romans",    "VRDR", "valence-romans"},
   {"Provence Rugby",      "Provence Rugby",               "Provence Rugby",         "Provence",          "PR",   "provence"},
   {"Angouleme",           "Soyaux Angouleme XV",          "Soyaux Angouleme",       "Angouleme",         "SAXV", "angouleme"},

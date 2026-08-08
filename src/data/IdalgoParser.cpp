@@ -388,8 +388,11 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
         match.status = MatchStatus::Live; // "7", "2"
 
     char raw[64] = {};
-    if (readClassText(start, "localteam_txt", raw, sizeof(raw))) {
+    char rawHome[64] = {}, rawAway[64] = {};
+    bool haveHome = readClassText(start, "localteam_txt", raw, sizeof(raw));
+    if (haveHome) {
         decodeHtmlEntities(raw);
+        strlcpy(rawHome, raw, sizeof(rawHome));
         const TeamEntry* t = findTeam(raw);
         if (t) {
             strlcpy(match.home_name,   t->canonical, sizeof(match.home_name));
@@ -404,8 +407,10 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
         }
     }
 
-    if (readClassText(start, "visitorteam_txt", raw, sizeof(raw))) {
+    bool haveAway = readClassText(start, "visitorteam_txt", raw, sizeof(raw));
+    if (haveAway) {
         decodeHtmlEntities(raw);
+        strlcpy(rawAway, raw, sizeof(rawAway));
         const TeamEntry* t = findTeam(raw);
         if (t) {
             strlcpy(match.away_name,   t->canonical, sizeof(match.away_name));
@@ -419,6 +424,15 @@ const char* IdalgoParser::parseMatchBlock(const char* start, const char* end, Ma
             strlcpy(match.away_abbrev, stripped, 5);
         }
     }
+
+    // Sanity check: a generic/error page from ladepeche.fr can still match this block's
+    // markup but carry placeholder branding text (e.g. "iDalgo.fr") on both sides — no
+    // real match ever has identical home/away team text. Reject it.
+    if (haveHome && haveAway && strcasecmp(rawHome, rawAway) == 0) return nullptr;
+
+    // Placeholder block (e.g. barrages/demi-finales/finale pages before those phases
+    // are decided): no team names at all — reject instead of showing a blank fixture.
+    if (!haveHome || !haveAway) return nullptr;
 
     const char* scoreTag = "span_idalgo_score_square_score_txt";
     const char* p1 = strstr(start, scoreTag);
@@ -585,6 +599,8 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     }
 
     int poolFinishedSeen = 0;
+    int fixIdx[TEMP_MAX], fixKept = 0;
+    int resIdx[TEMP_MAX], resKept = 0;
     for (int i = 0; i < tempCount; i++) {
         bool isPool = (strncmp(temp[i].group, "Gr.", 3) == 0);
         bool keep = false;
@@ -616,13 +632,27 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
         }
         if (!keep) continue;
 
-        if (temp[i].status == MatchStatus::Finished && out.result_count < CompetitionData::MAX_MATCHES)
-            out.results[out.result_count++] = temp[i];
-        else if (temp[i].status == MatchStatus::Scheduled && out.fixture_count < CompetitionData::MAX_MATCHES)
-            out.fixtures[out.fixture_count++] = temp[i];
-        else if (temp[i].status == MatchStatus::Live && out.result_count < CompetitionData::MAX_MATCHES)
-            out.results[out.result_count++] = temp[i];
+        if (temp[i].status == MatchStatus::Scheduled) fixIdx[fixKept++] = i;
+        else resIdx[resKept++] = i; // Finished or Live
+
     }
+
+    // Sort kept fixtures chronologically (TBD kickoff = 0 sorts last) so that capping to
+    // MAX_MATCHES below keeps the soonest matches, not just whatever the page listed first.
+    for (int i = 0; i < fixKept - 1; i++) {
+        for (int j = 0; j < fixKept - i - 1; j++) {
+            time_t a = temp[fixIdx[j]].kickoff_utc;
+            time_t b = temp[fixIdx[j+1]].kickoff_utc;
+            if (a == 0) a = (time_t)0x7FFFFFFF;
+            if (b == 0) b = (time_t)0x7FFFFFFF;
+            if (a > b) { int t = fixIdx[j]; fixIdx[j] = fixIdx[j+1]; fixIdx[j+1] = t; }
+        }
+    }
+
+    for (int i = 0; i < fixKept && out.fixture_count < CompetitionData::MAX_MATCHES; i++)
+        out.fixtures[out.fixture_count++] = temp[fixIdx[i]];
+    for (int i = 0; i < resKept && out.result_count < CompetitionData::MAX_MATCHES; i++)
+        out.results[out.result_count++] = temp[resIdx[i]];
 
     heap_caps_free(temp);
     Serial.printf("IdalgoCalendar: %u bytes, %d temp, %d results, %d fixtures\n",
@@ -693,10 +723,14 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
     }
 
     // Home team
+    bool haveHome = false;
+    char rawHome[64] = {}, rawAway[64] = {};
     const char* homePos = strstr(start, "a_idalgo_content_calendar_cup_date_match_local");
     if (homePos && homePos < end) {
-        if (readAttrVal(homePos, "title", raw, sizeof(raw))) {
+        haveHome = readAttrVal(homePos, "title", raw, sizeof(raw));
+        if (haveHome) {
             decodeHtmlEntities(raw);
+            strlcpy(rawHome, raw, sizeof(rawHome));
             const TeamEntry* t = findTeam(raw);
             if (t) {
                 strlcpy(match.home_name,   t->canonical, sizeof(match.home_name));
@@ -712,10 +746,13 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
     }
 
     // Away team
+    bool haveAway = false;
     const char* awayPos = strstr(start, "a_idalgo_content_calendar_cup_date_match_visitor");
     if (awayPos && awayPos < end) {
-        if (readAttrVal(awayPos, "title", raw, sizeof(raw))) {
+        haveAway = readAttrVal(awayPos, "title", raw, sizeof(raw));
+        if (haveAway) {
             decodeHtmlEntities(raw);
+            strlcpy(rawAway, raw, sizeof(rawAway));
             const TeamEntry* t = findTeam(raw);
             if (t) {
                 strlcpy(match.away_name,   t->canonical, sizeof(match.away_name));
@@ -729,6 +766,13 @@ bool IdalgoParser::parseCalendarPoolBlock(const char* start, const char* end, Ma
             }
         }
     }
+
+    // Placeholder knockout-phase blocks (1/4, 1/2, Finale) that ladepeche.fr keeps in the
+    // calendar year-round before the pool phase decides who qualifies: no team titles at all.
+    // Reject instead of showing a blank fixture. Also reject generic/error-page fallback
+    // markup that carries identical placeholder branding text on both sides (e.g. "iDalgo.fr").
+    if (!haveHome || !haveAway) return false;
+    if (strcasecmp(rawHome, rawAway) == 0) return false;
 
     // Score
     const char* scoreLeft = strstr(start, "span_idalgo_score_part_left");
