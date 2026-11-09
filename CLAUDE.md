@@ -176,6 +176,29 @@ After boot: ~90KB free. After web services start: ~40–50KB.
 
 ---
 
+## Session History (2026-11-09) — v1.8.1
+
+### Symptôme
+Top14 (et Pro D2) figés sur la J2 alors que le fetch récupérait bien la J9 (log série OK, `round 9/26`).
+
+### Cause
+`CompetitionData::MAX_MATCHES = 16` + `mergeCompetition` qui ajoute sans jamais retirer : après J1+J2 (7+7 T14, 8+8 PD2) les tableaux `results`/`fixtures` sont pleins et tout nouveau match est **ignoré silencieusement**. CC n'était pas touché (`updateCC` remplace).
+
+### Changes Made
+1. **`refreshLeague()`** (`MatchDB.cpp`, utilisé par `updateTop14`/`updateProd2`) — remplace les résultats si le fetch en ramène, purge les fixtures passées (kickoff > 2 h ou `round < current_round`) avant fusion.
+2. **Failsafe cohérence** — après fusion, si un match fetché manque dans la DB ou si `current_round` diffère → la compétition est reconstruite à partir des données fraîches (log `[FAILSAFE] DB incoherent`).
+3. **Failsafe ancienneté** (`DataFetcher::checkFailsafe`) — compétition activée sans mise à jour réussie depuis 6 h, WiFi OK : 1ʳᵉ fois reboot ; encore bloqué après ce reboot → suppression `/cache.json` + reboot. Niveau en `RTC_NOINIT_ATTR` (survit à `ESP.restart()`), remis à 0 au premier succès (`markSuccess`).
+4. **`fetchAll` appelle `fetchNextJournee`** — sinon aucune fixture de J+1 au boot.
+5. **`http.useHTTP10(true)`** (`IdalgoParser::fetch`/`fetchCalendar`) — ladepeche répond en `Transfer-Encoding: chunked` à `HTTPClient` ; `getStreamPtr()` étant le socket brut, les lignes de taille de chunk étaient copiées dans le HTML et coupaient parfois un marqueur `div_idalgo_dom_match` → match perdu au hasard (7ᵉ match de la J10 T14). Symptôme : taille lue ≠ taille curl et `cap=524288` (taille inconnue) dans le log.
+
+### Key Rules for Future Sessions
+- **Tout tableau à capacité fixe alimenté par fusion doit être purgé** : un `merge` sans suppression finit toujours par saturer et figer l'affichage sans erreur.
+- **Jamais `getStreamPtr()` sans `useHTTP10(true)`** : en HTTP/1.1 le flux brut contient les en-têtes de chunk. Pour tester le parseur sur le Mac, compiler `IdalgoParser.cpp` sans les fonctions réseau avec un stub `Serial` (clang++, `-I include -I src/data`).
+- **Reset de la carte depuis le Mac** : `esptool.py --before no_reset --after watchdog_reset chip_id` redémarre sur la flash ; un reset par RTS ou `--after hard_reset` peut la laisser en mode téléchargement (`boot:0x0 … waiting for download`).
+- **Port série** : la carte peut apparaître en `/dev/cu.usbmodem11101` (selon le hub). Lecture possible par pyserial (`/usr/bin/python3`, pyserial installé en `--user`) avec DTR=1 ; un reset par RTS fait ré-énumérer l'USB (ROM JTAG → TinyUSB « MatrixPortal ESP32_S3 »), il faut rouvrir le port après.
+
+---
+
 ## Session History (2026-08-05) — v1.7.0
 
 ### Contexte

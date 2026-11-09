@@ -137,6 +137,10 @@ bool IdalgoParser::fetch(const char* url, CompetitionData& out) {
     client.setTimeout(30000); // 30s for the whole connect operation
     HTTPClient http;
     http.setTimeout(60000);
+    // HTTP/1.0: no "Transfer-Encoding: chunked". getStreamPtr() is the raw socket, so
+    // chunk-size lines ("\r\n1f40\r\n") would otherwise be spliced into the HTML and
+    // randomly cut a match block marker in half (lost 7th match of T14 J10, 09/11/2026).
+    http.useHTTP10(true);
 
     // Retry on connection errors (HTTP < 0). At boot, a burst of TLS connections
     // to ladepeche gets refused (TCP RST); a short backoff lets the link/server settle.
@@ -524,6 +528,10 @@ bool IdalgoParser::fetchCalendar(const char* url, CompetitionData& out) {
     client.setTimeout(30000); // 30s for the whole connect operation
     HTTPClient http;
     http.setTimeout(60000);
+    // HTTP/1.0: no "Transfer-Encoding: chunked". getStreamPtr() is the raw socket, so
+    // chunk-size lines ("\r\n1f40\r\n") would otherwise be spliced into the HTML and
+    // randomly cut a match block marker in half (lost 7th match of T14 J10, 09/11/2026).
+    http.useHTTP10(true);
 
     // Same retry-on-connection-error policy as fetch() (boot bursts get refused).
     int code = -1;

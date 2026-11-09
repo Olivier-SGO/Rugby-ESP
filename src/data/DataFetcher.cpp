@@ -8,6 +8,23 @@
 #include "DisplayPrefs.h"
 #include <Arduino.h>
 #include <esp_heap_caps.h>
+#include <esp_attr.h>
+#include <LittleFS.h>
+
+// ── Failsafe ────────────────────────────────────────────────────────────────
+// If an enabled competition hasn't been updated successfully for FAILSAFE_STALE_MS
+// while WiFi is up: 1st time → reboot; still stale after that reboot → purge
+// /cache.json and reboot from scratch. Level survives soft reboots (RTC memory),
+// reset to 0 on the first successful update.
+static const uint32_t FAILSAFE_STALE_MS = 6UL * 3600UL * 1000UL;
+static const uint32_t FAILSAFE_MAGIC    = 0x52554742;  // "RUGB"
+RTC_NOINIT_ATTR static uint32_t rtcFailsafeMagic;
+RTC_NOINIT_ATTR static uint32_t rtcFailsafeLevel;
+
+static uint32_t failsafeLevel() {
+    if (rtcFailsafeMagic != FAILSAFE_MAGIC) { rtcFailsafeMagic = FAILSAFE_MAGIC; rtcFailsafeLevel = 0; }
+    return rtcFailsafeLevel;
+}
 
 extern uint8_t* gTLSReserve;
 bool gFetching = false;
@@ -155,6 +172,7 @@ void DataFetcher::loop() {
         return;
     }
     if (!_timeSynced) { syncNTP(); return; }
+    checkFailsafe();
 
     if (gOTADownloading) {
         Serial.println("[FETCH] OTA download in progress, skipping fetch");
@@ -168,6 +186,44 @@ void DataFetcher::loop() {
     if (now - _lastNTP > NTP_INTERVAL_MS) {
         syncNTP();
         _lastNTP = now;
+    }
+}
+
+void DataFetcher::markSuccess(int comp) {
+    if (comp < 0 || comp > 2) return;
+    _lastSuccessMs[comp] = millis();
+    if (failsafeLevel() != 0) {
+        Serial.println("[FAILSAFE] update OK — level reset");
+        rtcFailsafeLevel = 0;
+    }
+}
+
+void DataFetcher::checkFailsafe() {
+    uint32_t now = millis();
+    if (now - _lastFailsafeCheck < 60000) return;
+    _lastFailsafeCheck = now;
+    if (now < FAILSAFE_STALE_MS) return;  // give a fresh boot the full window
+
+    DisplayPrefs prefs;
+    loadDisplayPrefs(prefs);
+    static const char* NAMES[3] = {"Top14", "ProD2", "CC"};
+    for (int c = 0; c < 3; c++) {
+        if (!prefs.comp[c].enabled) continue;
+        if (now - _lastSuccessMs[c] < FAILSAFE_STALE_MS) continue;
+
+        uint32_t level = failsafeLevel();
+        Serial.printf("[FAILSAFE] %s not updated for %lu min (level %lu)\n",
+                      NAMES[c], (unsigned long)((now - _lastSuccessMs[c]) / 60000), (unsigned long)level);
+        if (level >= 1) {
+            Serial.println("[FAILSAFE] purging cache and rebooting from scratch");
+            LittleFS.remove("/cache.json");
+            LittleFS.remove("/cc_data.bin");
+        } else {
+            Serial.println("[FAILSAFE] rebooting");
+        }
+        rtcFailsafeLevel = level + 1;
+        delay(200);
+        ESP.restart();
     }
 }
 
@@ -215,6 +271,7 @@ void DataFetcher::fetchRotating() {
                 if (baseOk || d->result_count > 0 || d->fixture_count > 0) {
                     _db->updateTop14(*d);
                     fetched = true;
+                    if (d->result_count > 0 || d->fixture_count > 0) markSuccess(0);
                 }
                 heap_caps_free(d);
             }
@@ -231,6 +288,7 @@ void DataFetcher::fetchRotating() {
                 if (baseOk || d->result_count > 0 || d->fixture_count > 0) {
                     _db->updateProd2(*d);
                     fetched = true;
+                    if (d->result_count > 0 || d->fixture_count > 0) markSuccess(1);
                 }
                 heap_caps_free(d);
             }
@@ -242,6 +300,7 @@ void DataFetcher::fetchRotating() {
                 if (fetchCC(idalgo, *d)) {
                     _db->updateCC(*d);
                     fetched = true;
+                    if (d->result_count > 0 || d->fixture_count > 0) markSuccess(2);
                 }
                 heap_caps_free(d);
             }
@@ -329,6 +388,7 @@ void DataFetcher::fetchAll(bool forceAll) {
         // return a generic page with no usable matches. Don't let that wipe a good cache.
         if (ccOk && (cc->result_count > 0 || cc->fixture_count > 0 || cc->standing_count > 0)) {
             _db->updateCC(*cc);
+            markSuccess(2);
             Serial.printf("[FETCH] after CC updateDB: heap=%u free=%u psram=%u\n", ESP.getFreeHeap(), ESP.getFreeHeap(), ESP.getFreePsram());
         } else if (ccOk) {
             Serial.println("[FETCH] CC: fetch OK but no usable data — keeping previous cache");
@@ -344,12 +404,15 @@ void DataFetcher::fetchAll(bool forceAll) {
         bool t14Base = idalgo.fetch(top14Base, *top14);
         if (!t14Base)
             Serial.println("[FETCH] Top14 base (phase-reguliere) fetch failed — trying final phases anyway");
+        else
+            fetchNextJournee(*top14, top14Base, idalgo);
         // Final phases live on separate pages — fetch them even if the regular-phase
         // page no longer responds after season end (otherwise updates freeze on barrages).
         enrichWithFinalPhases(*top14, top14Base, idalgo);
         sortFixturesChronologically(*top14);
         if (t14Base || top14->result_count > 0 || top14->fixture_count > 0) {
             _db->updateTop14(*top14);
+            if (top14->result_count > 0 || top14->fixture_count > 0) markSuccess(0);
             Serial.printf("[FETCH] updateTop14 done (base=%d, %d res, %d fix)\n",
                           t14Base, top14->result_count, top14->fixture_count);
         } else {
@@ -367,12 +430,15 @@ void DataFetcher::fetchAll(bool forceAll) {
         bool pd2Base = idalgo.fetch(prod2Base, *prod2);
         if (!pd2Base)
             Serial.println("[FETCH] ProD2 base (phase-reguliere) fetch failed — trying final phases anyway");
+        else
+            fetchNextJournee(*prod2, prod2Base, idalgo);
         // Final phases live on separate pages — fetch them even if the regular-phase
         // page no longer responds after season end (otherwise updates freeze on barrages).
         enrichWithFinalPhases(*prod2, prod2Base, idalgo);
         sortFixturesChronologically(*prod2);
         if (pd2Base || prod2->result_count > 0 || prod2->fixture_count > 0) {
             _db->updateProd2(*prod2);
+            if (prod2->result_count > 0 || prod2->fixture_count > 0) markSuccess(1);
             Serial.printf("[FETCH] updateProd2 done (base=%d, %d res, %d fix)\n",
                           pd2Base, prod2->result_count, prod2->fixture_count);
         } else {

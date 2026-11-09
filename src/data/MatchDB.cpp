@@ -74,14 +74,48 @@ static void mergeCompetition(CompetitionData& dst, const CompetitionData& src) {
     dst.last_updated = time(nullptr);
 }
 
+// T14/ProD2: results and fixtures arrays are capped at MAX_MATCHES (16). A pure
+// merge never drops old rounds, so after ~2 journées the arrays are full and every
+// new result/fixture is silently discarded (display frozen on J2). Each fetch returns
+// the complete current round, so replace results when we got some, and prune
+// already-played / past fixtures before merging new ones.
+static void refreshLeague(CompetitionData& dst, const CompetitionData& src) {
+    if (src.result_count > 0) dst.result_count = 0;
+
+    const time_t now = time(nullptr);
+    for (int i = dst.fixture_count - 1; i >= 0; i--) {
+        const MatchData& f = dst.fixtures[i];
+        bool pastKickoff  = now > 1700000000 && f.kickoff_utc > 0 && f.kickoff_utc < now - 7200;
+        bool pastRound    = src.current_round > 0 && f.round > 0 && f.round < src.current_round;
+        if (pastKickoff || pastRound) removeMatch(dst.fixtures, dst.fixture_count, i);
+    }
+    mergeCompetition(dst, src);
+
+    // Failsafe: the DB must now reflect everything we just fetched. If anything is
+    // missing (arrays saturated, stale round…), drop the old state and take src as-is.
+    bool coherent = src.current_round == 0 || dst.current_round == src.current_round;
+    for (int i = 0; coherent && i < src.result_count; i++)
+        coherent = findMatch(dst.results, dst.result_count, src.results[i]) >= 0;
+    for (int i = 0; coherent && i < src.fixture_count; i++)
+        coherent = findMatch(dst.fixtures, dst.fixture_count, src.fixtures[i]) >= 0
+                || findMatch(dst.results, dst.result_count, src.fixtures[i]) >= 0;
+    if (!coherent) {
+        Serial.printf("[FAILSAFE] DB incoherent after merge (round db=%d src=%d) — replacing with fresh data\n",
+                      dst.current_round, src.current_round);
+        dst.result_count  = 0;
+        dst.fixture_count = 0;
+        mergeCompetition(dst, src);  // standings kept if src has none
+    }
+}
+
 void MatchDB::updateTop14(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    mergeCompetition(_top14, d);
+    refreshLeague(_top14, d);
     xSemaphoreGive(_mutex);
 }
 void MatchDB::updateProd2(const CompetitionData& d) {
     xSemaphoreTake(_mutex, portMAX_DELAY);
-    mergeCompetition(_prod2, d);
+    refreshLeague(_prod2, d);
     xSemaphoreGive(_mutex);
 }
 void MatchDB::updateCC(const CompetitionData& d) {

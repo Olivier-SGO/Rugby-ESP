@@ -30,6 +30,11 @@ private:
     TaskHandle_t _rendererHandle = nullptr;
     char _ccPhaseBase[128] = {};  // cached CC base URL, e.g. ".../champions-cup/1-4-de-finale"
     uint8_t _fetchIndex = 0;      // rotating fetch: 0=Top14, 1=ProD2, 2=CC
+    uint32_t _lastSuccessMs[3] = {0, 0, 0};  // millis() of last successful update per comp
+    uint32_t _lastFailsafeCheck = 0;
+
+    void markSuccess(int comp);
+    void checkFailsafe();
 
     void fetchLive();
     void loop();
